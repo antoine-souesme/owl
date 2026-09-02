@@ -1,3 +1,4 @@
+- Le code doit être en anglais
 - L'interface utilisateur doit être en anglais
 - Mettre une séparation entre le nom du repo et le numéro de PR
 - Mettre des code couleurs sur les différents éléments (repo, numéro, etc...) : Proposer avant de coder
