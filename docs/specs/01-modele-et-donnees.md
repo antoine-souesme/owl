@@ -230,8 +230,12 @@ traitement des erreurs :
 - succès, avec des données ;
 - réponse HTTP 200 contenant un tableau `errors` — erreur applicative ;
 - réponse HTTP 401 ou 403 — jeton invalide ou droits insuffisants ;
-- limite d'appels atteinte, reconnue à la réponse 403 accompagnée d'un en-tête de
-  réinitialisation, ou à un `rateLimit.remaining` nul.
+- limite d'appels atteinte. GitHub pose les en-têtes `x-ratelimit-*` sur la
+  quasi-totalité de ses réponses, refus de droits compris : leur seule présence
+  ne dit rien. C'est le solde `x-ratelimit-remaining` à zéro qui signale la
+  limite primaire atteinte, ou un `rateLimit.remaining` nul. La limite
+  secondaire se reconnaît à l'en-tête `retry-after`, un délai en secondes
+  converti en heure de reprise. Une réponse 429 est traitée comme une 403.
 
 ## Note d'implémentation
 
@@ -248,8 +252,9 @@ spec le remplace par `github::Client`, dont l'erreur est le type `thiserror`
   rate_limit }`. Un `rateLimit.remaining` nul dans une réponse réussie n'est pas
   une erreur : les données sont rendues, le solde est transmis, et la suspension
   du rafraîchissement reste le sujet de `05-erreurs-et-tests.md`.
-  `GithubError::RateLimited` est réservé au refus de GitHub, reconnu à la réponse
-  403 accompagnée d'un en-tête de réinitialisation.
+  `GithubError::RateLimited` est réservé au refus de GitHub, reconnu au solde
+  `x-ratelimit-remaining` à zéro ou à l'en-tête `retry-after` d'une limite
+  secondaire.
 - La chaîne de recherche est, jusqu'à `02-filtres.md`, la simple jointure des
   filtres des réglages. `is:pr` n'est pas ajouté ici : c'est une règle de
   `build_query`, et la dupliquer serait la faire vivre à deux endroits.

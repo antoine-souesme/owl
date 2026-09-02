@@ -23,9 +23,18 @@ use crate::model::{ListPage, PrDetail, PrSummary};
 
 const ENDPOINT: &str = "https://api.github.com/graphql";
 
-/// En-tête que GitHub renvoie avec un refus pour limite d'appels : c'est lui
-/// qui distingue une limite atteinte d'un simple manque de droits.
+/// Heure de reprise de la limite primaire, en secondes depuis l'époque.
+/// Présent sur la quasi-totalité des réponses de GitHub, refus de droits
+/// compris : ce n'est pas lui qui distingue les deux cas.
 const RESET_HEADER: &str = "x-ratelimit-reset";
+
+/// Solde d'appels restant sur la limite primaire. C'est ce compteur, à zéro,
+/// qui signale la limite atteinte.
+const REMAINING_HEADER: &str = "x-ratelimit-remaining";
+
+/// Délai d'attente, en secondes, que GitHub pose sur un refus de limite
+/// secondaire (abus détecté, indépendant du compteur primaire).
+const RETRY_AFTER_HEADER: &str = "retry-after";
 
 #[derive(Debug, Error)]
 pub enum GithubError {
@@ -120,17 +129,19 @@ impl Client {
             .map_err(|_| GithubError::Transport)?;
 
         let statut = reponse.status();
-        let reprise = reset_at(reponse.headers());
+        let limite = limite_d_appels(reponse.headers());
         let corps = reponse.text().await.map_err(|_| GithubError::Transport)?;
 
         if statut == StatusCode::UNAUTHORIZED {
             return Err(GithubError::Unauthorized);
         }
         if statut == StatusCode::FORBIDDEN || statut == StatusCode::TOO_MANY_REQUESTS {
-            // C'est l'en-tête de réinitialisation qui tranche : sans lui, le
-            // refus porte sur les droits, pas sur le nombre d'appels.
-            return Err(match reprise {
-                Some(_) => GithubError::RateLimited { reset_at: reprise },
+            // Le solde à zéro tranche pour la limite primaire ; `retry-after`
+            // pour la limite secondaire. Les deux surviennent avec les
+            // en-têtes `x-ratelimit-*`, présents aussi sur un simple refus de
+            // droits : leur seule présence ne dit rien.
+            return Err(match limite {
+                Some(reset_at) => GithubError::RateLimited { reset_at },
                 None => GithubError::Forbidden,
             });
         }
@@ -189,12 +200,44 @@ impl Client {
     }
 }
 
-/// Heure de réinitialisation portée par l'en-tête de limite d'appels, en
+/// Détecte une limite d'appels atteinte, primaire ou secondaire, et rend son
+/// heure de reprise si GitHub la donne.
+///
+/// `Some(_)` signale la limite atteinte ; `None` laisse le classement à un
+/// simple refus de droits. La primaire se lit sur un solde à zéro, la
+/// secondaire sur `retry-after`, un délai en secondes converti ici en heure
+/// absolue.
+fn limite_d_appels(entetes: &HeaderMap) -> Option<Option<DateTime<Utc>>> {
+    if solde_epuise(entetes) {
+        return Some(reset_at(entetes));
+    }
+    if let Some(delai) = retry_after(entetes) {
+        return Some(Some(Utc::now() + chrono::Duration::seconds(delai)));
+    }
+    None
+}
+
+/// Vrai quand le solde de la limite primaire est explicitement à zéro.
+fn solde_epuise(entetes: &HeaderMap) -> bool {
+    entetes
+        .get(REMAINING_HEADER)
+        .and_then(|valeur| valeur.to_str().ok())
+        .and_then(|brut| brut.trim().parse::<u64>().ok())
+        == Some(0)
+}
+
+/// Heure de réinitialisation portée par l'en-tête de limite primaire, en
 /// secondes depuis l'époque.
 fn reset_at(entetes: &HeaderMap) -> Option<DateTime<Utc>> {
     let brut = entetes.get(RESET_HEADER)?.to_str().ok()?;
     let secondes: i64 = brut.trim().parse().ok()?;
     Utc.timestamp_opt(secondes, 0).single()
+}
+
+/// Délai, en secondes, avant de pouvoir réessayer une limite secondaire.
+fn retry_after(entetes: &HeaderMap) -> Option<i64> {
+    let brut = entetes.get(RETRY_AFTER_HEADER)?.to_str().ok()?;
+    brut.trim().parse().ok()
 }
 
 /// Assemble la chaîne de recherche.
@@ -292,7 +335,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn une_reponse_403_sans_en_tete_est_un_manque_de_droits() {
+    async fn une_reponse_403_sans_aucun_en_tete_est_un_manque_de_droits() {
         let erreur = appel(
             "403 Forbidden",
             &[],
@@ -308,11 +351,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn une_reponse_403_avec_en_tete_de_reinitialisation_est_une_limite_d_appels() {
+    async fn une_reponse_403_avec_en_tetes_de_limite_non_atteinte_est_un_manque_de_droits() {
+        // Cas réel de GitHub : un refus de droits porte quand même les
+        // en-têtes `x-ratelimit-*`, avec un solde non nul.
+        let erreur = appel(
+            "403 Forbidden",
+            &[
+                ("x-ratelimit-limit", "5000"),
+                ("x-ratelimit-remaining", "4999"),
+                ("x-ratelimit-reset", "1788348917"),
+            ],
+            r#"{"message":"Resource not accessible"}"#,
+        )
+        .await
+        .expect_err("erreur attendue");
+        assert!(matches!(erreur, GithubError::Forbidden));
+        assert_eq!(
+            erreur.to_string(),
+            "Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`."
+        );
+    }
+
+    #[tokio::test]
+    async fn une_reponse_403_avec_solde_epuise_est_une_limite_d_appels() {
         // 1 788 084 720 = 2026-08-30T10:12:00Z
         let erreur = appel(
             "403 Forbidden",
-            &[("x-ratelimit-reset", "1788084720")],
+            &[
+                ("x-ratelimit-remaining", "0"),
+                ("x-ratelimit-reset", "1788084720"),
+            ],
             r#"{"message":"API rate limit exceeded"}"#,
         )
         .await
@@ -322,6 +390,24 @@ mod tests {
                 reset_at.expect("heure de reprise").to_rfc3339(),
                 "2026-08-30T10:12:00+00:00"
             ),
+            autre => panic!("erreur inattendue : {autre:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn une_reponse_403_avec_retry_after_est_une_limite_d_appels_secondaire() {
+        let avant = Utc::now();
+        let erreur = appel(
+            "403 Forbidden",
+            &[("retry-after", "30")],
+            r#"{"message":"You have exceeded a secondary rate limit"}"#,
+        )
+        .await
+        .expect_err("erreur attendue");
+        match erreur {
+            GithubError::RateLimited { reset_at } => {
+                assert!(reset_at.expect("heure de reprise") > avant);
+            }
             autre => panic!("erreur inattendue : {autre:?}"),
         }
     }
