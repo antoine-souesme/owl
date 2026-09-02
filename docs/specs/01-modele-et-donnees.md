@@ -233,9 +233,9 @@ traitement des erreurs :
 - limite d'appels atteinte. GitHub pose les en-têtes `x-ratelimit-*` sur la
   quasi-totalité de ses réponses, refus de droits compris : leur seule présence
   ne dit rien. C'est le solde `x-ratelimit-remaining` à zéro qui signale la
-  limite primaire atteinte. La limite
-  secondaire se reconnaît à l'en-tête `retry-after`, un délai en secondes
-  converti en heure de reprise. Une réponse 429 est traitée comme une 403.
+  limite primaire atteinte. La limite secondaire se reconnaît à l'en-tête
+  `retry-after`, un délai en secondes converti en heure de reprise. Une réponse
+  429 est traitée comme une 403.
 
 ## Note d'implémentation
 
