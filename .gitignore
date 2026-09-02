@@ -1,0 +1,14 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# macOS
+.DS_Store
+
+# Éditeurs
+.idea/
+*.swp
+
+# Réglages locaux de owl, jamais versionnés
+config.toml
