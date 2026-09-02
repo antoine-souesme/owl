@@ -12,3 +12,6 @@
 
 # Réglages locaux de owl, jamais versionnés
 config.toml
+
+# Agentic coding
+.superpowers
