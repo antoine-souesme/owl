@@ -9,14 +9,12 @@ use std::process::Command;
 use thiserror::Error;
 
 /// Jeton d'authentification. Son contenu ne sort que par `expose`.
-// `expose` n'est pas encore appelé par `main.rs`, qui est provisoire
-// (tâche 3 s'en servira pour l'en-tête HTTP) : sans ce `allow`, clippy
-// signale le champ et la méthode comme morts dans ce crate binaire.
-#[allow(dead_code)]
 pub struct Token(String);
 
 impl Token {
     /// Donne accès au jeton en clair. Seul l'en-tête HTTP doit s'en servir.
+    // Pas encore appelée hors tests : l'en-tête HTTP arrive avec la spec 03
+    // (réseau). Sans ce `allow`, clippy la signale comme morte.
     #[allow(dead_code)]
     pub fn expose(&self) -> &str {
         &self.0

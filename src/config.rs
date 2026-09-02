@@ -23,7 +23,6 @@ pub struct Config {
     /// Intervalle de rafraîchissement en secondes. 0 désactive le minuteur.
     pub refresh_interval: u64,
     /// Méthode de fusion préférée. Utilisée par `04-fusion.md`.
-    #[allow(dead_code)] // consommé par la spec 04, pas encore lu ici
     pub preferred_merge_method: MergeMethod,
     /// Nombre maximal de PR ramenées par requête, de 1 à 100.
     pub page_size: u16,
