@@ -155,6 +155,14 @@ Le mode brut et l'écran alterné sont restaurés à la sortie, y compris en cas
 panique du programme et sur `Ctrl+C`. Un terminal cassé après un plantage est
 considéré comme un défaut.
 
+## Note d'implémentation
+
+Les fondations laissent une seule vue et un clavier réduit : `app::Key` ne
+distingue que `Char` et `Other`, `ui::draw` dessine toujours la liste, et
+`ui/detail.rs` est vide. Cette spec étend `Key` aux flèches et aux touches
+d'action, ajoute la vue courante à `App`, et fait de `ui::draw` un véritable
+aiguillage.
+
 ## Critères de réussite
 
 Tous vérifiables sans terminal, en envoyant des événements à `App` :

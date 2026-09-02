@@ -13,9 +13,6 @@ pub struct Token(String);
 
 impl Token {
     /// Donne accès au jeton en clair. Seul l'en-tête HTTP doit s'en servir.
-    // Pas encore appelée hors tests : l'en-tête HTTP arrive avec la spec 03
-    // (réseau). Sans ce `allow`, clippy la signale comme morte.
-    #[allow(dead_code)]
     pub fn expose(&self) -> &str {
         &self.0
     }
