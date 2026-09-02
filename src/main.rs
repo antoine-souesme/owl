@@ -1,6 +1,10 @@
 //! Démarrage de `owl` : réglages, jeton, écran, restauration du terminal.
 
+mod app;
 mod config;
+mod filter;
+mod github;
+mod model;
 mod token;
 
 use std::io::{self, Stdout};
