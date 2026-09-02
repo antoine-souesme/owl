@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind};
+use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -157,7 +157,7 @@ fn execute_command(
 ) -> bool {
     match commande {
         Command::Quit => return true,
-        Command::Fetch {
+        Command::FetchList {
             generation,
             query,
             page_size,
@@ -166,10 +166,35 @@ fn execute_command(
             let client = client.clone();
             tokio::spawn(async move {
                 let resultat = client.fetch_pull_requests(&query, page_size).await;
-                let _ = envoi.send(Event::Data {
+                let _ = envoi.send(Event::ListLoaded {
                     generation,
                     result: resultat,
                 });
+            });
+        }
+        Command::FetchDetail {
+            generation,
+            summary,
+        } => {
+            let envoi = envoi.clone();
+            let client = client.clone();
+            let cle = summary.key.clone();
+            tokio::spawn(async move {
+                let resultat = client.fetch_detail(&summary).await;
+                let _ = envoi.send(Event::DetailLoaded {
+                    generation,
+                    key: cle,
+                    result: resultat,
+                });
+            });
+        }
+        Command::OpenInBrowser { url } => {
+            // Dans une tâche bloquante : lancer le navigateur peut prendre un
+            // instant, et l'écran doit rester réactif pendant ce temps.
+            // Un échec reste silencieux ; la remontée des erreurs de cette
+            // nature appartient à `05-erreurs-et-tests.md`.
+            tokio::task::spawn_blocking(move || {
+                let _ = open::that_detached(&url);
             });
         }
     }
@@ -204,8 +229,16 @@ fn spawn_keyboard(envoi: UnboundedSender<Event>) {
         if touche.kind != KeyEventKind::Press {
             continue;
         }
-        let traduite = match touche.code {
-            KeyCode::Char(caractere) => Key::Char(caractere),
+        let traduite = match (touche.code, touche.modifiers) {
+            // Ctrl+C d'abord : sans ce cas, elle passerait pour un « c ».
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => Key::CtrlC,
+            (KeyCode::Char(caractere), _) => Key::Char(caractere),
+            (KeyCode::Up, _) => Key::Up,
+            (KeyCode::Down, _) => Key::Down,
+            (KeyCode::Left, _) => Key::Left,
+            (KeyCode::Right, _) => Key::Right,
+            (KeyCode::Enter, _) => Key::Enter,
+            (KeyCode::Esc, _) => Key::Esc,
             _ => Key::Other,
         };
         if envoi.send(Event::Key(traduite)).is_err() {

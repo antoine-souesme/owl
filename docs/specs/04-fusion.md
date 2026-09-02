@@ -117,6 +117,12 @@ ne s'en servent pas encore : le champ de `config::Config` est renseigné et lais
 de côté. Cette spec est celle qui lui donne son usage. `ui/merge.rs` est vide
 jusque-là.
 
+La touche `m` est déjà reconnue par `app` depuis
+`03-affichage-et-navigation.md`, où elle ne fait rien : ni `MergeDialog`, ni
+contrôles avant fusion. Cette spec apporte le champ `merge` de `App`, la
+fenêtre, la capture du clavier, et le fait qu'un `Tick` ne rafraîchisse pas la
+liste tant que la fenêtre est ouverte.
+
 ## Critères de réussite
 
 - Un dépôt n'autorisant que l'écrasement ne propose jamais le rebasage ni le commit
