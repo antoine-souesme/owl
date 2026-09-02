@@ -112,10 +112,10 @@ fusion, une confirmation.
 
 ## Note d'implémentation
 
-Les fondations lisent `preferred_merge_method` dans les réglages mais ne s'en
-servent pas encore : le champ porte un `#[allow(dead_code)]` dans
-`config::Config`. Cette spec l'utilise et retire l'attribut. `ui/merge.rs` est
-vide jusque-là.
+Les fondations lisent et valident `preferred_merge_method` dans les réglages, mais
+ne s'en servent pas encore : le champ de `config::Config` est renseigné et laissé
+de côté. Cette spec est celle qui lui donne son usage. `ui/merge.rs` est vide
+jusque-là.
 
 ## Critères de réussite
 

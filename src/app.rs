@@ -29,12 +29,21 @@ pub enum Event {
     Key(Key),
     /// Tour de minuteur de rafraîchissement.
     Tick,
+    /// Arrêt demandé par `main` : panique d'une tâche, ou clavier hors service.
+    /// Sans lui, la boucle resterait bloquée sur la file d'événements.
+    Quit,
     /// Résultat d'une demande réseau.
     Data {
         generation: Generation,
         result: Result<Vec<PullRequest>, String>,
     },
 }
+
+/// Aide clavier, en fin de barre d'état. Le texte est ici, pas dans `ui`.
+const AIDE: &str = "q quitter · r rafraîchir";
+
+/// Message affiché tant qu'aucune réponse n'est arrivée.
+const ATTENTE_INITIALE: &str = "Chargement…";
 
 /// Ce que `app` demande à `main` de faire.
 #[derive(Debug, PartialEq)]
@@ -49,7 +58,8 @@ pub enum Command {
 
 pub struct App {
     pub items: Vec<PullRequest>,
-    /// Ligne affichée dans la barre d'état, prête à dessiner.
+    /// Message principal de la barre d'état : le résumé de la liste, ou
+    /// l'erreur en cours. Vide tant qu'aucune réponse n'est arrivée.
     pub status: String,
     pub loading: bool,
     pub should_quit: bool,
@@ -62,7 +72,7 @@ impl App {
     pub fn new(config: Config) -> Self {
         Self {
             items: Vec::new(),
-            status: "Chargement…".to_string(),
+            status: String::new(),
             loading: false,
             should_quit: false,
             last_refresh: None,
@@ -79,6 +89,10 @@ impl App {
     pub fn handle(&mut self, event: Event) -> Vec<Command> {
         match event {
             Event::Key(Key::Char('q')) => {
+                self.should_quit = true;
+                vec![Command::Quit]
+            }
+            Event::Quit => {
                 self.should_quit = true;
                 vec![Command::Quit]
             }
@@ -113,6 +127,32 @@ impl App {
             filters: self.config.filters.clone(),
             page_size: self.config.page_size,
         }
+    }
+
+    /// Barre d'état complète, prête à dessiner telle quelle.
+    ///
+    /// Assemblée ici, et pas dans `ui`, parce que chaque morceau est une
+    /// décision : le libellé de l'heure, l'annonce d'une requête en cours,
+    /// l'aide clavier. `ui` se contente d'afficher la chaîne rendue.
+    pub fn status_line(&self) -> String {
+        let mut morceaux: Vec<String> = Vec::new();
+
+        if self.status.is_empty() {
+            // Rien n'est encore arrivé : l'attente est le message principal,
+            // et il serait redondant de l'annoncer une seconde fois.
+            morceaux.push(ATTENTE_INITIALE.to_string());
+        } else {
+            morceaux.push(self.status.clone());
+            if let Some(instant) = self.last_refresh {
+                morceaux.push(format!("mis à jour à {}", instant.format("%H:%M")));
+            }
+            if self.loading {
+                morceaux.push("chargement…".to_string());
+            }
+        }
+
+        morceaux.push(AIDE.to_string());
+        morceaux.join(" · ")
     }
 
     /// Résumé de la liste pour la barre d'état.
@@ -295,6 +335,105 @@ mod tests {
             result: Ok(vec![]),
         });
         assert_eq!(app.status, "Aucune pull request");
+    }
+
+    /// Au stade des fondations, un tour de minuteur relance sans condition et
+    /// la réponse abandonnée est jetée par sa génération.
+    /// `03-affichage-et-navigation.md` resserrera cette règle : un `Tick` reçu
+    /// pendant un chargement n'émettra plus de seconde requête.
+    #[test]
+    fn un_tick_pendant_un_chargement_relance_et_jette_la_premiere_reponse() {
+        let (mut app, premiere) = app_demarree();
+        let commandes = app.handle(Event::Tick);
+        let seconde = match &commandes[0] {
+            Command::Fetch { generation, .. } => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        assert!(seconde > premiere, "une nouvelle génération doit s'ouvrir");
+        assert!(app.loading);
+
+        // La réponse de la requête abandonnée arrive après : elle est jetée.
+        app.handle(Event::Data {
+            generation: premiere,
+            result: Ok(vec![pr(1)]),
+        });
+        assert!(app.items.is_empty(), "la première réponse doit être jetée");
+        assert!(app.loading, "la seconde requête reste en cours");
+
+        app.handle(Event::Data {
+            generation: seconde,
+            result: Ok(vec![pr(2)]),
+        });
+        assert_eq!(app.items, vec![pr(2)]);
+        assert!(!app.loading);
+    }
+
+    #[test]
+    fn q_pendant_un_chargement_quitte_quand_meme() {
+        let (mut app, _) = app_demarree();
+        assert!(app.loading, "une requête est bien en cours");
+        let commandes = app.handle(Event::Key(Key::Char('q')));
+        assert_eq!(commandes, vec![Command::Quit]);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn un_evenement_quit_arrete_la_boucle() {
+        let (mut app, _) = app_demarree();
+        let commandes = app.handle(Event::Quit);
+        assert_eq!(commandes, vec![Command::Quit]);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn la_barre_d_etat_au_demarrage_n_annonce_l_attente_qu_une_fois() {
+        let (app, _) = app_demarree();
+        assert_eq!(app.status_line(), "Chargement… · q quitter · r rafraîchir");
+    }
+
+    #[test]
+    fn la_barre_d_etat_apres_une_reponse_donne_l_heure_et_l_aide() {
+        let (mut app, generation) = app_demarree();
+        app.handle(Event::Data {
+            generation,
+            result: Ok(vec![pr(1), pr(2)]),
+        });
+        let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
+        assert_eq!(
+            app.status_line(),
+            format!("2 pull requests · mis à jour à {heure} · q quitter · r rafraîchir")
+        );
+    }
+
+    #[test]
+    fn la_barre_d_etat_annonce_le_chargement_d_un_rafraichissement() {
+        let (mut app, generation) = app_demarree();
+        app.handle(Event::Data {
+            generation,
+            result: Ok(vec![pr(1)]),
+        });
+        app.handle(Event::Key(Key::Char('r')));
+        let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
+        assert_eq!(
+            app.status_line(),
+            format!(
+                "1 pull request · mis à jour à {heure} · chargement… · q quitter · r rafraîchir"
+            )
+        );
+    }
+
+    #[test]
+    fn la_barre_d_etat_reprend_l_erreur_telle_quelle() {
+        let (mut app, generation) = app_demarree();
+        app.handle(Event::Data {
+            generation,
+            result: Err("Réseau injoignable".to_string()),
+        });
+        assert_eq!(
+            app.status_line(),
+            "Réseau injoignable · q quitter · r rafraîchir",
+            "aucune heure : aucun rafraîchissement n'a encore réussi"
+        );
     }
 
     #[test]

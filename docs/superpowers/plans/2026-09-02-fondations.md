@@ -1451,7 +1451,10 @@ git commit -m "Ajoute l'état de l'application, les générations et les modules
 
 - [ ] **Step 1: Écrire `src/ui/list.rs`**
 
-Aucune décision ici : les textes viennent de `app`.
+Aucune décision ici : les textes viennent de `app`. La barre d'état est donc
+affichée telle que `app::App::status_line` la rend — le libellé de l'heure, son
+format, l'annonce d'une requête en cours et l'aide clavier sont des décisions, et
+elles s'assemblent dans `app`, où elles se testent.
 
 ```rust
 //! Dessin de la liste des pull requests et de la barre d'état.
@@ -1488,15 +1491,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
     );
     frame.render_widget(liste, zones[0]);
 
-    let heure = app
-        .last_refresh
-        .map(|instant| format!(" · mis à jour à {}", instant.format("%H:%M")))
-        .unwrap_or_default();
-    let attente = if app.loading { " · chargement…" } else { "" };
-    let barre = Paragraph::new(format!(
-        "{}{heure}{attente} · q quitter · r rafraîchir",
-        app.status
-    ));
+    let barre = Paragraph::new(app.status_line());
     frame.render_widget(barre, zones[1]);
 }
 ```
@@ -1833,10 +1828,10 @@ Dans `docs/specs/04-fusion.md`, ajouter à la fin, avant les critères de réuss
 ```markdown
 ## Note d'implémentation
 
-Les fondations lisent `preferred_merge_method` dans les réglages mais ne s'en
-servent pas encore : le champ porte un `#[allow(dead_code)]` dans
-`config::Config`. Cette spec l'utilise et retire l'attribut. `ui/merge.rs` est
-vide jusque-là.
+Les fondations lisent et valident `preferred_merge_method` dans les réglages, mais
+ne s'en servent pas encore : le champ de `config::Config` est renseigné et laissé
+de côté. Cette spec est celle qui lui donne son usage. `ui/merge.rs` est vide
+jusque-là.
 ```
 
 - [ ] **Step 8: Vérifications obligatoires, une dernière fois**
@@ -1862,3 +1857,27 @@ Volontairement hors périmètre des fondations, traité par les specs suivantes 
 - La navigation, la vue détail, la sélection, le terminal trop étroit (`03`).
 - La fusion et sa fenêtre de confirmation (`04`).
 - Les erreurs 401 et 403, la limite d'appels, le client testé contre un serveur local (`05`).
+
+---
+
+## Correctifs apportés après la revue finale
+
+La revue de la branche a corrigé plusieurs points que les extraits de code des
+tâches 4 et 5 ci-dessus ne montrent pas. En cas de doute, le code du dépôt fait
+foi, pas ces extraits :
+
+- La barre d'état est assemblée par `app::App::status_line` ; `ui/list.rs` ne
+  fabrique plus aucun texte, et l'attente n'est plus annoncée deux fois au
+  premier écran (l'étape 1 de la tâche 5 est corrigée ci-dessus).
+- `enter_terminal` crée le garde dès que le mode brut est pris, pour qu'une
+  erreur ensuite rende malgré tout le terminal.
+- Le crochet de panique pousse un `Event::Quit` dans la file : une panique dans
+  une tâche arrête aussi la boucle, au lieu de la laisser dessiner sur le shell.
+- Les producteurs clavier et minuteur ne démarrent qu'après la prise de l'écran.
+- La boucle s'arrête sur `Command::Quit` ; `should_quit` reste l'état lu par
+  `ui` et par les tests.
+- Un clavier hors service demande l'arrêt au lieu de figer le programme.
+- `restore_terminal` ne rend plus de `Result` et le minuteur utilise
+  `MissedTickBehavior::Delay`.
+- `tests/startup.rs` couvre aussi les erreurs de réglages, avec un dossier
+  personnel temporaire.

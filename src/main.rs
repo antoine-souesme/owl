@@ -67,7 +67,7 @@ struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = restore_terminal();
+        restore_terminal();
     }
 }
 
@@ -75,26 +75,34 @@ type Ecran = Terminal<CrosstermBackend<Stdout>>;
 
 /// Prend le contrôle du terminal et installe le crochet de panique.
 /// Le garde couvre la sortie normale et l'erreur, le crochet couvre la panique.
-fn enter_terminal() -> Result<(Ecran, TerminalGuard)> {
+///
+/// Le crochet reçoit une copie de l'émetteur d'événements : une panique dans
+/// une tâche n'arrête que cette tâche, alors que le crochet rend déjà le
+/// terminal. Sans un `Quit` poussé dans la file, la boucle continuerait à
+/// dessiner par-dessus le shell rendu à l'utilisateur.
+fn enter_terminal(envoi: UnboundedSender<Event>) -> Result<(Ecran, TerminalGuard)> {
     let crochet_precedent = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |infos| {
-        let _ = restore_terminal();
+        restore_terminal();
+        let _ = envoi.send(Event::Quit);
         crochet_precedent(infos);
     }));
 
     enable_raw_mode()?;
+    // Le garde naît dès la première prise de contrôle réussie : toute erreur
+    // rencontrée ensuite rend malgré tout le terminal en sortant de portée.
+    let garde = TerminalGuard;
     let mut sortie = io::stdout();
     execute!(sortie, EnterAlternateScreen)?;
     let terminal = Terminal::new(CrosstermBackend::new(sortie))?;
-    Ok((terminal, TerminalGuard))
+    Ok((terminal, garde))
 }
 
 /// Rend le terminal à l'utilisateur. Volontairement tolérante aux erreurs :
 /// elle est appelée depuis un `Drop` et depuis un crochet de panique.
-fn restore_terminal() -> Result<()> {
+fn restore_terminal() {
     let _ = disable_raw_mode();
     let _ = execute!(io::stdout(), LeaveAlternateScreen);
-    Ok(())
 }
 
 async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
@@ -104,6 +112,10 @@ async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
 
     let (envoi, mut reception) = mpsc::unbounded_channel::<Event>();
 
+    // L'écran est pris avant de lancer les producteurs : le clavier doit lire
+    // un terminal en mode brut, jamais un terminal encore en mode ligne.
+    let (mut terminal, _garde) = enter_terminal(envoi.clone())?;
+
     // Producteur 1 : le clavier, dans une tâche bloquante dédiée.
     spawn_keyboard(envoi.clone());
 
@@ -112,19 +124,19 @@ async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
         spawn_timer(envoi.clone(), intervalle);
     }
 
-    let (mut terminal, _garde) = enter_terminal()?;
-
     // Producteur 3 : les résultats réseau, une tâche par demande.
+    // `start` ne demande jamais l'arrêt : son résultat n'a rien à décider.
     for commande in etat.start() {
         execute_command(commande, &envoi, &jeton);
     }
     terminal.draw(|cadre| ui::draw(cadre, &etat))?;
 
     while let Some(evenement) = reception.recv().await {
+        let mut arret = false;
         for commande in etat.handle(evenement) {
-            execute_command(commande, &envoi, &jeton);
+            arret |= execute_command(commande, &envoi, &jeton);
         }
-        if etat.should_quit {
+        if arret {
             break;
         }
         terminal.draw(|cadre| ui::draw(cadre, &etat))?;
@@ -133,11 +145,16 @@ async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
     Ok(())
 }
 
-/// Exécute une commande émise par `app`. C'est le seul endroit où le jeton
-/// circule : il n'entre jamais dans `app` ni dans `ui`.
-fn execute_command(commande: Command, envoi: &UnboundedSender<Event>, jeton: &Arc<token::Token>) {
+/// Exécute une commande émise par `app` et rend `true` si elle demande
+/// l'arrêt de la boucle. C'est le seul endroit où le jeton circule : il
+/// n'entre jamais dans `app` ni dans `ui`.
+fn execute_command(
+    commande: Command,
+    envoi: &UnboundedSender<Event>,
+    jeton: &Arc<token::Token>,
+) -> bool {
     match commande {
-        Command::Quit => {}
+        Command::Quit => return true,
         Command::Fetch {
             generation,
             filters,
@@ -155,6 +172,7 @@ fn execute_command(commande: Command, envoi: &UnboundedSender<Event>, jeton: &Ar
             });
         }
     }
+    false
 }
 
 /// Lit le clavier dans une tâche bloquante et traduit les touches pour `app`.
@@ -170,7 +188,13 @@ fn spawn_keyboard(envoi: UnboundedSender<Event>) {
                 }
                 continue;
             }
-            Err(_) => return,
+            // Clavier hors service : sans touche, plus aucun `q` ne peut
+            // arriver, et le mode brut a désarmé Ctrl-C. On demande l'arrêt
+            // plutôt que de laisser le programme figé.
+            Err(_) => {
+                let _ = envoi.send(Event::Quit);
+                return;
+            }
         }
 
         let Ok(TerminalEvent::Key(touche)) = crossterm::event::read() else {
@@ -193,6 +217,9 @@ fn spawn_keyboard(envoi: UnboundedSender<Event>) {
 fn spawn_timer(envoi: UnboundedSender<Event>, secondes: u64) {
     tokio::spawn(async move {
         let mut minuteur = tokio::time::interval(Duration::from_secs(secondes));
+        // Une boucle ralentie ne doit pas rattraper les tours manqués : sinon
+        // chaque retard déclencherait une rafale de requêtes.
+        minuteur.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // Le premier tour part immédiatement : on le consomme, `start` a déjà
         // lancé la requête initiale.
         minuteur.tick().await;

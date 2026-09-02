@@ -74,11 +74,11 @@ pub fn resolve_from(
 
 /// Rend `None` pour une chaîne vide ou faite d'espaces.
 fn non_vide(valeur: String) -> Option<String> {
-    let taille = valeur.trim();
-    if taille.is_empty() {
+    let nettoyee = valeur.trim();
+    if nettoyee.is_empty() {
         None
     } else {
-        Some(taille.to_string())
+        Some(nettoyee.to_string())
     }
 }
 
