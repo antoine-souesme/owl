@@ -12,36 +12,85 @@ struct App {
     prs: Vec<PrSummary>,
     selected: usize,
     selected_key: Option<PrKey>,   // sert à retrouver la sélection après rafraîchissement
-    details: HashMap<PrKey, PrDetail>,   // cache de la session
+    details: HashMap<PrKey, CachedDetail>,   // cache de la session
     loading: Loading,
     error: Option<String>,
     rate_limit: Option<RateLimit>,
-    merge: Option<MergeDialog>,    // voir 04-fusion.md
+    last_refresh: Option<DateTime<Local>>,
+    filters: Vec<Filter>,          // les filtres des réglages, traduits une seule fois
     config: Config,
-    generation: u64,
+    list_generation: Generation,
+    detail_generation: Generation,
     should_quit: bool,
 }
 
 enum View { List, Detail { key: PrKey, scroll: u16 } }
 
 struct Loading { list: bool, detail: bool }
+
+struct CachedDetail { detail: PrDetail, loaded_at: DateTime<Local> }
 ```
+
+Les deux compteurs de génération sont indépendants. Un compteur unique ferait
+qu'ouvrir un détail périmerait une requête de liste en vol : son résultat serait
+jeté et `loading.list` resterait bloqué à `true`.
+
+Le cache retient l'heure de chargement de chaque détail, affichée en fin de vue
+détail : un détail peut être périmé sans qu'on le sache, autant dire quand il a été
+lu.
 
 `app` ne fait aucun appel réseau. Il reçoit des événements et renvoie, le cas
 échéant, des demandes que la boucle principale exécute :
 
 ```rust
-enum Event { Key(KeyEvent), Tick, ListLoaded(u64, Result<Vec<PrSummary>>), DetailLoaded(u64, PrKey, Result<PrDetail>), Merged(u64, PrKey, Result<()>) }
+enum Event {
+    Key(Key),
+    Tick,
+    Quit,
+    ListLoaded { generation: Generation, result: Result<ListPage> },
+    DetailLoaded { generation: Generation, key: PrKey, result: Result<PrDetail> },
+}
 
-enum Command { FetchList, FetchDetail(PrKey), Merge(PrKey, MergeMethod), Quit }
+enum Command {
+    FetchList { generation: Generation, query: String, page_size: u16 },
+    FetchDetail { generation: Generation, summary: PrSummary },
+    OpenInBrowser { url: String },
+    Quit,
+}
 
 impl App {
     fn handle(&mut self, event: Event) -> Vec<Command> { … }
 }
 ```
 
+`Event::ListLoaded` transporte un `ListPage` : les pull requests et le solde
+d'appels lu au passage voyagent ensemble depuis `01-modele-et-donnees.md`, les
+séparer imposerait un second canal pour la même réponse.
+
+`Event::Quit` est l'arrêt demandé par la boucle principale : le crochet de panique
+en a besoin pour débloquer la boucle après avoir rendu le terminal.
+
+`Command::FetchDetail` porte le résumé entier et pas la seule clé : `github` le
+recopie dans le `PrDetail` qu'il rend, et la boucle principale n'a pas la liste où
+retrouver la pull request.
+
+`Command::OpenInBrowser` sert la touche `o` : `app` choisit l'URL, la boucle
+principale l'ouvre. `app` ne fait aucun effet de bord lui-même.
+
 Cette forme — un état, des événements entrants, des commandes sortantes — est ce qui
 rend la navigation testable sans terminal ni réseau.
+
+## Ce que `app` donne à dessiner
+
+`ui` ne compose rien. `app` rend la liste sous la forme d'un `ListRender` — soit les
+lignes prêtes à dessiner, soit le message de liste vide avec le rappel des filtres,
+soit le message de terminal trop étroit — et le détail sous la forme d'un
+`Vec<DetailLine>`. Chaque élément porte un `Tone` que `ui` traduit en couleur, et
+c'est la seule traduction que `ui` fait.
+
+Les largeurs se mesurent en caractères, pas en colonnes de terminal : mesurer les
+colonnes réellement occupées demanderait une dépendance de plus. Un titre en
+idéogrammes est donc tronqué un peu tard ; c'est le seul cas concerné.
 
 ## Clavier
 
@@ -94,37 +143,60 @@ Relectures :
 
 Le préfixe `[brouillon]` marque les PR en brouillon, et la ligne est grisée. Le
 symbole `⚠` devant le titre signale un conflit de fusion. Un état de fusion inconnu
-n'affiche rien, puisque GitHub est peut-être encore en train de le calculer.
+n'affiche rien, puisque GitHub est peut-être encore en train de le calculer. Les deux
+marques se cumulent dans cet ordre — `[brouillon] ⚠ Titre` — le brouillon d'abord
+parce qu'il qualifie la pull request, le conflit ensuite parce qu'il qualifie la
+fusion.
 
 Le titre est tronqué à la largeur disponible. Le nom du dépôt n'est jamais tronqué :
 c'est lui qui permet de s'orienter. Si la fenêtre est trop étroite pour tenir le
-dépôt et le numéro, `owl` affiche un message demandant d'élargir le terminal plutôt
-qu'un affichage illisible.
+dépôt et le numéro, `owl` affiche à la place de la liste : « Élargis le terminal : le
+dépôt et le numéro n'y tiennent pas. »
+
+La liste défile quand elle dépasse la hauteur de la fenêtre, en suivant la sélection.
+Le défilement est une affaire de dessin : `ui` le recalcule à chaque image depuis
+`selected` et ne retient rien entre deux dessins.
 
 L'ordre d'affichage est celui renvoyé par GitHub, donc par date de mise à jour
 décroissante. Il n'y a pas de tri dans `owl`.
 
 Une barre en bas de l'écran indique le nombre de PR, l'état du chargement, l'heure du
-dernier rafraîchissement réussi, et l'erreur en cours s'il y en a une.
+dernier rafraîchissement réussi, et l'erreur en cours s'il y en a une. Elle se termine
+par l'aide clavier de la vue affichée : une touche qui ne fait rien dans la vue
+courante n'y est pas rappelée.
 
 Une liste vide affiche « Aucune pull request » avec un rappel des filtres actifs —
 sans quoi un filtre trop restrictif ressemble à une panne.
 
 ## Vue détail
 
-De haut en bas : le titre avec le dépôt et le numéro ; une ligne d'auteur et de
-branches (`de <head> vers <base>`) ; les mêmes états que la liste, en clair cette
+De haut en bas : le titre avec le dépôt et le numéro ; la ligne d'auteur ; la ligne
+des branches (`de <head> vers <base>`) ; les mêmes états que la liste, en clair cette
 fois ; la description de la PR ; la liste des vérifications, une par ligne avec son
 résultat ; les relectures et les commentaires, dans l'ordre chronologique ; les
-fichiers modifiés avec leur nombre de lignes ajoutées et retirées.
+fichiers modifiés avec leur nombre de lignes ajoutées et retirées ; enfin l'heure de
+chargement du détail.
+
+L'auteur et les branches occupent deux lignes distinctes, et non une seule : l'auteur
+vient du résumé déjà en mémoire, les branches n'arrivent qu'avec la réponse de détail.
+C'est le seul découpage qui permet d'afficher l'auteur avant la réponse.
 
 Le tout est une seule zone qui défile, pas un ensemble de panneaux. C'est plus simple
 à écrire et plus lisible dans un terminal étroit.
+
+La vue détail ne renvoie pas à la ligne : une ligne logique vaut une ligne d'écran.
+`app` peut donc les compter et borner le défilement sans connaître la largeur ni la
+hauteur. Les lignes trop longues sont tronquées comme celles de la liste, et `o` ouvre
+la pull request dans le navigateur pour lire une description entière.
 
 Tant que la requête de détail n'a pas répondu, l'en-tête est affiché — il vient de
 `PrSummary`, déjà en mémoire — et le reste indique « chargement ». Une PR déjà
 consultée pendant la session s'affiche immédiatement depuis le cache, et sa requête
 n'est pas relancée sauf appui sur `r`.
+
+Si la pull request affichée a quitté la liste, son en-tête est repris du résumé porté
+par le détail en cache. Un cache qui devient inaffichable dès qu'un rafraîchissement
+retire la PR ne sert à rien.
 
 Le diff n'est pas affiché ligne à ligne : seuls les chemins et les compteurs le sont.
 Afficher un diff coloré dans un terminal est un projet à lui seul, et `owl` a la
@@ -156,12 +228,6 @@ panique du programme et sur `Ctrl+C`. Un terminal cassé après un plantage est
 considéré comme un défaut.
 
 ## Note d'implémentation
-
-Les fondations laissent une seule vue et un clavier réduit : `app::Key` ne
-distingue que `Char` et `Other`, `ui::draw` dessine toujours la liste, et
-`ui/detail.rs` est vide. Cette spec étend `Key` aux flèches et aux touches
-d'action, ajoute la vue courante à `App`, et fait de `ui::draw` un véritable
-aiguillage.
 
 Le champ `merge` de `App` et le blocage du rafraîchissement pendant la fenêtre
 de fusion ne sont pas apportés par cette spec : la touche `m` y est reconnue

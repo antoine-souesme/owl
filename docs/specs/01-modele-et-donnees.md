@@ -179,8 +179,9 @@ Les vérifications arrivent sous deux formes, `CheckRun` (GitHub Actions et
 
 Les listes sont volontairement bornées : les vingt dernières relectures, les vingt
 derniers commentaires, les cent premiers fichiers. Il n'y a pas de pagination dans la
-vue détail. Quand une liste est tronquée, l'écran l'indique par une ligne
-« … et N de plus ».
+vue détail, et le dépassement de ces bornes n'est pas signalé : la requête ne demande
+aucun `totalCount`, et la touche `o` ouvre la pull request dans le navigateur pour
+tout voir.
 
 Les états qui n'existent que dans la vue détail sont traduits ainsi :
 
@@ -195,12 +196,6 @@ Les états qui n'existent que dans la vue détail sont traduits ainsi :
 | Relecture d'état `APPROVED` / `CHANGES_REQUESTED` | `Approved` / `ChangesRequested` |
 | Relecture d'un autre état (`COMMENTED`, `DISMISSED`, `PENDING`) | `None` |
 | Relecture sans `submittedAt` (en attente, jamais soumise) | ignorée |
-
-La ligne « … et N de plus » n'est pas réalisable avec cette requête : elle ne
-demande aucun `totalCount`, et une liste bornée à vingt éléments qui en renvoie
-vingt est indiscernable d'une liste complète de vingt. La spec 03, qui possède cet
-affichage, tranchera entre ajouter les `totalCount` à la requête et abandonner la
-ligne.
 
 ## Mutation de fusion
 

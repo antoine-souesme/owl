@@ -42,7 +42,9 @@ src/
     dto.rs       types de réponse brute, mappés vers model
   model.rs       types métier
   filter.rs      filtres et construction de la requête de recherche
-  app.rs         état de l'application, réception des événements
+  app/
+    mod.rs       état de l'application, réception des événements
+    render.rs    composition de l'affichage : pictogrammes, colonnes, messages
   ui/
     mod.rs       aiguillage de dessin selon la vue
     list.rs      dessin de la liste
