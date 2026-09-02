@@ -102,8 +102,13 @@ parenthèse : « écraser les commits », « rebaser », « créer un commit de 
 `app` expose la fenêtre sous la forme d'un `MergeRender { title, lines }` : un
 titre de cadre et des lignes déjà écrites, chevron de sélection compris. Toute la
 composition — le chevron, les libellés, la phrase « imposé par le dépôt », le
-message d'attente — est décidée dans `app/render.rs`. `ui/merge.rs` ne calcule que
-la taille et le centrage, efface le fond et dessine le cadre.
+message d'attente — est décidée dans `app/render.rs`. `merge_render` reçoit la
+largeur disponible, exactement comme `status_line(width)`, et replie lui-même
+chaque ligne contre une largeur de contenu bornée — sur les limites de mots quand
+c'est possible, sans jamais perdre de contenu — pour qu'un message de GitHub trop
+long pour tenir sur une ligne s'affiche entier, replié, plutôt que tronqué.
+`ui/merge.rs` ne calcule que la taille et le centrage des lignes déjà repliées,
+efface le fond et dessine le cadre.
 
 ## Déroulement de la fusion
 

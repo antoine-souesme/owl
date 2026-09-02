@@ -4,10 +4,6 @@
 //! classement qui pilote le traitement des erreurs décrit en
 //! `docs/specs/05-erreurs-et-tests.md`.
 
-// `fetch_detail` est appelée par la spec 03. Un attribut interne doit précéder
-// tout élément du fichier, déclarations de modules comprises.
-#![allow(dead_code)]
-
 pub mod dto;
 pub mod queries;
 
@@ -322,6 +318,47 @@ mod tests {
         format!("http://{adresse}/graphql")
     }
 
+    /// Sert plusieurs réponses HTTP figées d'affilée, une par connexion
+    /// acceptée, dans l'ordre donné. Rend l'adresse à viser et le corps de
+    /// chaque requête reçue, dans l'ordre où elles sont arrivées — c'est ce
+    /// qui permet de vérifier qu'un appel enchaîne bien deux requêtes, et
+    /// dans quel ordre.
+    async fn serveur_enchaine(
+        corps: &[&str],
+    ) -> (String, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        let ecoute = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("un port libre doit être disponible");
+        let adresse = ecoute.local_addr().expect("adresse locale");
+
+        let reponses: Vec<String> = corps
+            .iter()
+            .map(|corps| {
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    corps.len(),
+                    corps
+                )
+            })
+            .collect();
+
+        let (emetteur, recepteur) = tokio::sync::mpsc::unbounded_channel();
+
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            for reponse in reponses {
+                let (mut flux, _) = ecoute.accept().await.expect("connexion acceptée");
+                let mut tampon = [0u8; 8192];
+                let lu = flux.read(&mut tampon).await.unwrap_or(0);
+                let _ = emetteur.send(String::from_utf8_lossy(&tampon[..lu]).into_owned());
+                let _ = flux.write_all(reponse.as_bytes()).await;
+                let _ = flux.flush().await;
+            }
+        });
+
+        (format!("http://{adresse}/graphql"), recepteur)
+    }
+
     async fn appel(
         statut: &str,
         entetes: &[(&str, &str)],
@@ -600,6 +637,43 @@ mod tests {
         assert_eq!(
             erreur.to_string(),
             "At least 1 approving review is required by reviewers with write access."
+        );
+    }
+
+    #[tokio::test]
+    async fn sans_identifiant_le_detail_est_demande_avant_la_mutation() {
+        const DETAIL: &str = include_str!("../../tests/fixtures/detail.json");
+        const MUTATION: &str =
+            r#"{"data":{"mergePullRequest":{"pullRequest":{"number":142,"state":"MERGED"}}}}"#;
+        let (adresse, mut requetes) = serveur_enchaine(&[DETAIL, MUTATION]).await;
+        let client = Client::with_endpoint("jeton", &adresse).expect("client construit");
+
+        let resultat = client
+            .merge_pull_request(&resume_de_test(), None, MergeMethod::Squash)
+            .await;
+
+        assert!(resultat.is_ok(), "{resultat:?}");
+
+        let premiere = requetes
+            .recv()
+            .await
+            .expect("la requête de détail doit être envoyée");
+        assert!(
+            premiere.contains("query Detail"),
+            "la première requête doit être le détail : {premiere}"
+        );
+
+        let seconde = requetes
+            .recv()
+            .await
+            .expect("la requête de mutation doit être envoyée");
+        assert!(
+            seconde.contains("mutation Merge"),
+            "la seconde requête doit être la mutation : {seconde}"
+        );
+        assert!(
+            seconde.contains("PR_kwDOABCD12345"),
+            "la mutation doit utiliser l'identifiant renvoyé par le détail : {seconde}"
         );
     }
 }

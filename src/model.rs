@@ -5,10 +5,6 @@
 //! `github::dto`, seul endroit qui voit passer un `SUCCESS` ou un
 //! `nameWithOwner`.
 
-// Les specs 03 et 04 consomment la vue détail et les règles de fusion. D'ici
-// là, une partie de ces champs n'est lue que par les tests de traduction.
-#![allow(dead_code)]
-
 use chrono::{DateTime, Utc};
 
 /// Auteur affiché quand GitHub n'en renvoie aucun : le compte a été supprimé.

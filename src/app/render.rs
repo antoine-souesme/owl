@@ -421,6 +421,16 @@ const AIDE_CHOIX: &str = "Entrée pour confirmer · Échap pour annuler";
 const AIDE_ECHEC: &str = "Entrée pour réessayer · Échap pour fermer";
 const FUSION_EN_COURS: &str = "Fusion en cours…";
 
+/// Largeur de contenu au-delà de laquelle une ligne se replie plutôt que de
+/// s'étaler sur tout le terminal : une fenêtre modale reste lisible, elle ne
+/// prend pas toute la largeur disponible sous prétexte qu'elle le pourrait.
+const LARGEUR_MAX_CONTENU: usize = 60;
+
+/// Ce que `ui::merge` retire de la largeur disponible pour poser la fenêtre :
+/// les deux colonnes de bordure et, de chaque côté, la marge intérieure
+/// (`MARGE` dans `ui/merge.rs`, à tenir à jour avec cette valeur).
+const HORS_CONTENU: usize = 2 + 2 * 2;
+
 /// Libellé d'une méthode dans la liste de choix.
 fn libelle(methode: MergeMethod) -> &'static str {
     match methode {
@@ -440,12 +450,18 @@ fn libelle_court(methode: MergeMethod) -> &'static str {
 }
 
 impl App {
-    /// Compose la fenêtre de fusion, s'il y en a une.
+    /// Compose la fenêtre de fusion, s'il y en a une, pour la largeur
+    /// disponible donnée — comme `status_line(width)`.
     ///
-    /// La largeur n'entre pas ici : la fenêtre s'ajuste à son contenu, et le
-    /// message d'erreur de GitHub n'est jamais tronqué.
-    pub fn merge_render(&self) -> Option<MergeRender> {
+    /// Chaque ligne est repliée ici, contre une largeur de contenu bornée à
+    /// la fois par l'espace disponible et par `LARGEUR_MAX_CONTENU` : `ui` ne
+    /// mesure plus que ce qu'il reçoit, il ne coupe et ne replie rien. Le
+    /// message d'erreur de GitHub n'est ainsi jamais tronqué, même très long.
+    pub fn merge_render(&self, width: u16) -> Option<MergeRender> {
         let fenetre = self.merge.as_ref()?;
+        let largeur_contenu = (width as usize)
+            .saturating_sub(HORS_CONTENU)
+            .clamp(1, LARGEUR_MAX_CONTENU);
 
         let mut lignes = vec![
             format!("{} #{}", fenetre.key.repo, fenetre.key.number),
@@ -485,11 +501,63 @@ impl App {
             }
         }
 
+        let lignes = lignes
+            .iter()
+            .flat_map(|ligne| replier(ligne, largeur_contenu))
+            .collect();
+
         Some(MergeRender {
             title: TITRE_FUSION.to_string(),
             lines: lignes,
         })
     }
+}
+
+/// Replie un texte contre une largeur donnée, en coupant sur les limites de
+/// mots quand c'est possible. Une ligne qui tient déjà n'est pas touchée : les
+/// libellés courts (dépôt, titre, aides) ressortent intacts. Un mot lui-même
+/// plus large que la largeur est coupé faute de mieux, mais rien n'est jamais
+/// perdu — c'est ce qui garantit que le message de GitHub reste entier.
+fn replier(texte: &str, largeur: usize) -> Vec<String> {
+    if texte.chars().count() <= largeur {
+        return vec![texte.to_string()];
+    }
+
+    let mut resultat = Vec::new();
+    let mut courante = String::new();
+
+    for mot in texte.split(' ') {
+        let longueur_avec_mot = if courante.is_empty() {
+            mot.chars().count()
+        } else {
+            courante.chars().count() + 1 + mot.chars().count()
+        };
+
+        if !courante.is_empty() && longueur_avec_mot > largeur {
+            resultat.push(std::mem::take(&mut courante));
+        }
+
+        if mot.chars().count() > largeur {
+            if !courante.is_empty() {
+                resultat.push(std::mem::take(&mut courante));
+            }
+            let mut reste = mot;
+            while reste.chars().count() > largeur {
+                let coupe: String = reste.chars().take(largeur).collect();
+                reste = &reste[coupe.len()..];
+                resultat.push(coupe);
+            }
+            courante = reste.to_string();
+        } else {
+            if !courante.is_empty() {
+                courante.push(' ');
+            }
+            courante.push_str(mot);
+        }
+    }
+
+    resultat.push(courante);
+    resultat
 }
 
 #[cfg(test)]
@@ -855,14 +923,16 @@ mod tests {
     #[test]
     fn sans_fenetre_ouverte_il_n_y_a_rien_a_dessiner() {
         let app = app_garnie(vec![pr_avec_regles(1, tout_autorise())]);
-        assert!(app.merge_render().is_none());
+        assert!(app.merge_render(LARGE).is_none());
     }
 
     #[test]
     fn la_fenetre_montre_le_depot_le_titre_et_les_methodes_autorisees() {
         let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
         app.handle(Event::Key(Key::Char('m')));
-        let rendu = app.merge_render().expect("la fenêtre doit être ouverte");
+        let rendu = app
+            .merge_render(LARGE)
+            .expect("la fenêtre doit être ouverte");
 
         assert_eq!(rendu.title, " Fusionner ");
         assert_eq!(rendu.lines[0], "moi/depot #142");
@@ -890,7 +960,9 @@ mod tests {
         };
         let mut app = app_garnie(vec![pr_avec_regles(142, regles)]);
         app.handle(Event::Key(Key::Char('m')));
-        let rendu = app.merge_render().expect("la fenêtre doit être ouverte");
+        let rendu = app
+            .merge_render(LARGE)
+            .expect("la fenêtre doit être ouverte");
 
         assert!(rendu
             .lines
@@ -903,7 +975,9 @@ mod tests {
         let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
         app.handle(Event::Key(Key::Char('m')));
         app.handle(Event::Key(Key::Enter));
-        let rendu = app.merge_render().expect("la fenêtre doit rester ouverte");
+        let rendu = app
+            .merge_render(LARGE)
+            .expect("la fenêtre doit rester ouverte");
 
         assert!(rendu.lines.contains(&"Fusion en cours…".to_string()));
         assert!(!rendu
@@ -919,7 +993,9 @@ mod tests {
         if let Some(fenetre) = app.merge.as_mut() {
             fenetre.state = MergeDialogState::Failed("Base branch was modified.".to_string());
         }
-        let rendu = app.merge_render().expect("la fenêtre doit être ouverte");
+        let rendu = app
+            .merge_render(LARGE)
+            .expect("la fenêtre doit être ouverte");
 
         assert!(rendu
             .lines
@@ -927,5 +1003,44 @@ mod tests {
         assert!(rendu
             .lines
             .contains(&"Entrée pour réessayer · Échap pour fermer".to_string()));
+    }
+
+    #[test]
+    fn un_message_d_erreur_trop_long_est_replie_plutot_que_tronque() {
+        let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
+        app.handle(Event::Key(Key::Char('m')));
+        let message = "Required status check \"tests\" is expected. \
+             · At least 1 approving review is required by reviewers with write access."
+            .to_string();
+        if let Some(fenetre) = app.merge.as_mut() {
+            fenetre.state = MergeDialogState::Failed(message.clone());
+        }
+        let rendu = app
+            .merge_render(LARGE)
+            .expect("la fenêtre doit être ouverte");
+
+        // Aucune ligne ne dépasse la largeur maximale de contenu de la
+        // fenêtre : le message est reconstitué en le repliant.
+        for ligne in &rendu.lines {
+            assert!(
+                ligne.chars().count() <= 60,
+                "ligne trop longue, non repliée : {ligne}"
+            );
+        }
+
+        // Rien n'est perdu : les morceaux du message, mis bout à bout avec
+        // une espace, redonnent le message d'origine.
+        let debut = rendu
+            .lines
+            .iter()
+            .position(|ligne| ligne.starts_with("Required"))
+            .expect("le message doit apparaître : {rendu:?}");
+        let fin = rendu
+            .lines
+            .iter()
+            .position(|ligne| ligne.ends_with("write access."))
+            .expect("la fin du message doit apparaître");
+        let reconstitue = rendu.lines[debut..=fin].join(" ");
+        assert_eq!(reconstitue, message);
     }
 }

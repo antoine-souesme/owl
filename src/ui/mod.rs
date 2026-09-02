@@ -16,7 +16,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         View::Detail { .. } => detail::draw(frame, zone, app),
     }
     // Par-dessus la vue courante, et après elle : la fenêtre est modale.
-    if let Some(rendu) = app.merge_render() {
+    if let Some(rendu) = app.merge_render(zone.width) {
         merge::draw(frame, zone, &rendu);
     }
 }

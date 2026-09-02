@@ -1,7 +1,8 @@
 //! Dessin de la fenêtre de confirmation de fusion.
 //!
-//! Aucune décision : les lignes sont composées par `app`. Ici, seulement la
-//! taille, le centrage, l'effacement du fond et le cadre.
+//! Aucune décision : les lignes arrivent déjà repliées par `app`, à la
+//! largeur qu'elle a reçue. Ici, seulement la mesure, le centrage,
+//! l'effacement du fond et le cadre.
 
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -21,8 +22,9 @@ pub fn draw(frame: &mut Frame, area: Rect, rendu: &MergeRender) {
         .unwrap_or(0);
     let contenu = contenu.max(rendu.title.chars().count());
 
-    // Deux colonnes de bordure, deux marges de chaque côté. La fenêtre ne
-    // dépasse jamais l'écran, même si un message de GitHub est très long.
+    // Deux colonnes de bordure, deux marges de chaque côté. `app` a déjà
+    // replié les lignes contre la largeur disponible : ce `.min` est un
+    // filet de sécurité, pas un repli.
     let largeur = u16::try_from(contenu + 2 + 2 * MARGE as usize)
         .unwrap_or(u16::MAX)
         .min(area.width);

@@ -1165,6 +1165,30 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn un_merge_finished_d_une_autre_pr_est_ignore() {
+        let resume = pr_avec_regles(142, tout_autorise());
+        let autre = PrKey {
+            repo: resume.key.repo.clone(),
+            number: 7,
+        };
+        let mut app = app_garnie(vec![resume]);
+        app.handle(Event::Key(Key::Char('m')));
+        confirmer(&mut app);
+        let fenetre_avant = app.merge.clone();
+
+        let commandes = app.handle(Event::MergeFinished {
+            key: autre,
+            result: Ok(()),
+        });
+
+        assert!(commandes.is_empty(), "{commandes:?}");
+        assert_eq!(
+            app.merge, fenetre_avant,
+            "la fenêtre reste inchangée : la réponse ne la concerne pas"
+        );
+    }
+
+    #[test]
     fn entree_apres_un_echec_reessaie_avec_la_meme_methode() {
         let resume = pr_avec_regles(142, tout_autorise());
         let cle = resume.key.clone();
@@ -1557,6 +1581,16 @@ pub(crate) mod tests {
             barre.contains("← liste") && !barre.contains("→ détail"),
             "une touche sans effet dans la vue n'est pas rappelée : {barre}"
         );
+    }
+
+    #[test]
+    fn l_aide_clavier_de_la_fenetre_de_fusion_remplace_celle_de_la_liste() {
+        let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
+        app.handle(Event::Key(Key::Char('m')));
+        let barre = app.status_line(CONFORTABLE);
+
+        assert!(barre.contains(AIDE_FUSION), "{barre}");
+        assert!(!barre.contains("q quitter"), "{barre}");
     }
 
     #[test]
