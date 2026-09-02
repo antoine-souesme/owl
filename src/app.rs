@@ -4,11 +4,6 @@
 //! événement, met l'état à jour, et renvoie des commandes que `main` exécute.
 //! Toutes les décisions d'affichage — quel message, quel nombre — sont prises
 //! ici, jamais dans `ui`.
-//!
-//! Rien ici n'est encore appelé par `main` : la tâche 5 câble la boucle
-//! d'événements. Sans ce `allow`, clippy signalerait tout le module comme
-//! mort ; les tests ci-dessous prouvent déjà qu'il se comporte comme prévu.
-#![allow(dead_code)]
 
 use chrono::{DateTime, Local};
 
@@ -21,6 +16,9 @@ use crate::model::PullRequest;
 pub type Generation = u64;
 
 /// Touche reçue, traduite par `main`. `app` ignore volontairement `crossterm`.
+// Construite uniquement par `main` (tâche 5) et par les tests ; rien dans ce
+// fichier ne construit encore de variante hors tests.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
     Char(char),
@@ -29,6 +27,9 @@ pub enum Key {
 }
 
 /// Ce qui arrive dans la file d'événements.
+// Construite uniquement par `main` (tâche 5) et par les tests ; rien dans ce
+// fichier ne construit encore de variante hors tests.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum Event {
     Key(Key),
@@ -52,6 +53,8 @@ pub enum Command {
     Quit,
 }
 
+// Rien ne construit `App` avant la tâche 5, qui la câble depuis `main`.
+#[allow(dead_code)]
 pub struct App {
     pub items: Vec<PullRequest>,
     /// Ligne affichée dans la barre d'état, prête à dessiner.
@@ -63,6 +66,8 @@ pub struct App {
     config: Config,
 }
 
+// Aucune de ces méthodes n'est encore appelée hors tests avant la tâche 5.
+#[allow(dead_code)]
 impl App {
     pub fn new(config: Config) -> Self {
         Self {

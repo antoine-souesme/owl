@@ -1419,7 +1419,7 @@ Expected: tous les tests réussis, dont les 11 de `app`.
 - [ ] **Step 8: Vérifications obligatoires**
 
 Run: `cargo build && cargo test && cargo clippy -- -D warnings && cargo fmt --check`
-Expected: tout passe. Si clippy signale un champ jamais lu de `App` (par exemple `last_refresh` avant la tâche 5), ne pas ajouter d'attribut : la tâche 5 le lit dans `ui`, il suffit d'enchaîner.
+Expected: tout passe. Avant la tâche 5, rien ne construit encore `App` ni ne déclenche `Key`/`Event` hors tests : clippy signale ces éléments comme morts. Ajouter un `#[allow(dead_code)]` au plus près de chaque élément signalé (le type ou l'`impl` concerné, jamais toute une file avec un `#![allow(dead_code)]` global), avec un court commentaire expliquant que la tâche 5 le câble. La tâche 5 retire chaque attribut au fur et à mesure que l'élément devient réellement utilisé.
 
 - [ ] **Step 9: Commit**
 
