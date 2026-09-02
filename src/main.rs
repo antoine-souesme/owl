@@ -5,6 +5,7 @@ mod config;
 mod filter;
 mod github;
 mod model;
+mod startup;
 mod token;
 mod ui;
 
@@ -112,7 +113,18 @@ async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
     let client = Arc::new(github::Client::new(jeton.expose())?);
     let mut etat = App::new(reglages);
 
+    // La première requête part avant l'écran : un jeton refusé ou des droits
+    // insuffisants sont des erreurs de démarrage, et leur message doit sortir
+    // sur la sortie d'erreur, pas finir en ligne de barre d'état.
+    let premiers = premiere_requete(&mut etat, &client).await?;
+
     let (envoi, mut reception) = mpsc::unbounded_channel::<Event>();
+
+    // Le résultat déjà obtenu entre dans la file avant tout le reste : la
+    // boucle le traitera à son premier tour.
+    for evenement in premiers {
+        let _ = envoi.send(evenement);
+    }
 
     // L'écran est pris avant de lancer les producteurs : le clavier doit lire
     // un terminal en mode brut, jamais un terminal encore en mode ligne.
@@ -126,11 +138,6 @@ async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
         spawn_timer(envoi.clone(), intervalle);
     }
 
-    // Producteur 3 : les résultats réseau, une tâche par demande.
-    // `start` ne demande jamais l'arrêt : son résultat n'a rien à décider.
-    for commande in etat.start() {
-        execute_command(commande, &envoi, &client);
-    }
     terminal.draw(|cadre| ui::draw(cadre, &etat))?;
 
     while let Some(evenement) = reception.recv().await {
@@ -145,6 +152,34 @@ async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Exécute la demande initiale de `app` et rend les événements à injecter
+/// dans la boucle. Une erreur de démarrage remonte en `Err` : `main` l'écrit
+/// et s'arrête, le terminal n'ayant jamais été pris.
+async fn premiere_requete(etat: &mut App, client: &Arc<github::Client>) -> Result<Vec<Event>> {
+    let mut evenements = Vec::new();
+    for commande in etat.start() {
+        match commande {
+            Command::FetchList {
+                generation,
+                query,
+                page_size,
+            } => {
+                let resultat = client.fetch_pull_requests(&query, page_size).await;
+                match startup::classify(resultat) {
+                    startup::FirstResponse::Fatal(message) => return Err(anyhow::anyhow!(message)),
+                    startup::FirstResponse::Start(result) => {
+                        evenements.push(Event::ListLoaded { generation, result })
+                    }
+                }
+            }
+            // `start` n'émet que la demande de liste. Toute autre commande
+            // serait un changement de `app` non répercuté ici.
+            autre => unreachable!("commande inattendue au démarrage : {autre:?}"),
+        }
+    }
+    Ok(evenements)
 }
 
 /// Exécute une commande émise par `app` et rend `true` si elle demande
