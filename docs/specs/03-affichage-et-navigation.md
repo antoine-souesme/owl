@@ -46,6 +46,7 @@ lu.
 enum Event {
     Key(Key),
     Tick,
+    Resize,
     Quit,
     ListLoaded { generation: Generation, result: Result<ListPage> },
     DetailLoaded { generation: Generation, key: PrKey, result: Result<PrDetail> },
@@ -66,6 +67,13 @@ impl App {
 `Event::ListLoaded` transporte un `ListPage` : les pull requests et le solde
 d'appels lu au passage voyagent ensemble depuis `01-modele-et-donnees.md`, les
 séparer imposerait un second canal pour la même réponse.
+
+`Event::Resize` dit que le terminal a changé de taille. `app` n'en fait rien : il
+ne renvoie aucune commande, ne touche pas à l'état et n'efface pas le message en
+cours — un redimensionnement n'est pas un appui sur une touche. Il existe pour que
+la boucle principale redessine, puisqu'elle ne redessine qu'après un événement.
+Sans lui, l'écran resterait figé à l'ancienne taille jusqu'à la touche ou au tour
+de minuteur suivant.
 
 `Event::Quit` est l'arrêt demandé par la boucle principale : le crochet de panique
 en a besoin pour débloquer la boucle après avoir rendu le terminal.
@@ -103,12 +111,15 @@ idéogrammes est donc tronqué un peu tard ; c'est le seul cas concerné.
 | `m` | ouvre la fenêtre de fusion | ouvre la fenêtre de fusion |
 | `r` | rafraîchit la liste | rafraîchit le détail affiché |
 | `o` | ouvre la PR dans le navigateur | idem |
-| `q`, `Ctrl+C` | quitte | quitte |
+| `q` | quitte | quitte |
+| `Ctrl+C` | quitte | quitte |
 
 La sélection ne boucle pas : en haut de liste, la flèche haut ne fait rien.
 
 Quand la fenêtre de fusion est ouverte, elle capte tout le clavier ; les touches
-ci-dessus sont inactives jusqu'à sa fermeture.
+ci-dessus sont inactives jusqu'à sa fermeture, `Ctrl+C` exceptée : elle quitte
+`owl` même fenêtre ouverte, `q` non. Pendant ce temps, l'aide clavier de la barre
+d'état devient « ↑↓ choisir · Entrée confirmer · Échap annuler ».
 
 ## Vue liste
 
@@ -233,12 +244,6 @@ Le mode brut et l'écran alterné sont restaurés à la sortie, y compris en cas
 panique du programme et sur `Ctrl+C`. Un terminal cassé après un plantage est
 considéré comme un défaut.
 
-## Note d'implémentation
-
-Le champ `merge` de `App` et le blocage du rafraîchissement pendant la fenêtre
-de fusion ne sont pas apportés par cette spec : la touche `m` y est reconnue
-mais sans effet, et `04-fusion.md` s'en charge.
-
 ## Critères de réussite
 
 Tous vérifiables sans terminal, en envoyant des événements à `App` :
@@ -253,3 +258,5 @@ Tous vérifiables sans terminal, en envoyant des événements à `App` :
   les bornes de la nouvelle liste.
 - Un résultat de liste portant une génération périmée est ignoré.
 - Un `Tick` reçu pendant un chargement de liste n'émet pas de seconde requête.
+- Un `Resize` n'émet aucune commande, ne déplace pas la sélection, ne change pas de
+  vue et n'efface pas le message en cours.

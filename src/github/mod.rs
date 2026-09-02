@@ -4,10 +4,6 @@
 //! classement qui pilote le traitement des erreurs décrit en
 //! `docs/specs/05-erreurs-et-tests.md`.
 
-// `fetch_detail` est appelée par la spec 03. Un attribut interne doit précéder
-// tout élément du fichier, déclarations de modules comprises.
-#![allow(dead_code)]
-
 pub mod dto;
 pub mod queries;
 
@@ -19,7 +15,7 @@ use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
 
-use crate::model::{ListPage, PrDetail, PrSummary};
+use crate::model::{ListPage, MergeMethod, PrDetail, PrSummary};
 
 const ENDPOINT: &str = "https://api.github.com/graphql";
 
@@ -203,6 +199,43 @@ impl Client {
             .map(|pr| pr.to_detail(summary.clone()))
             .ok_or(GithubError::NotFound)
     }
+
+    /// Fusionne une pull request avec la méthode donnée.
+    ///
+    /// L'identifiant GraphQL n'est pas dans la requête de liste. Quand
+    /// l'appelant ne l'a pas — la vue détail n'a jamais été ouverte — il est
+    /// récupéré ici par la requête de détail, puis la mutation enchaîne.
+    /// L'enchaînement reste du réseau, donc il reste ici : `app` ne fait pas
+    /// d'appel et n'a pas à connaître ce détour.
+    ///
+    /// Rien n'est rendu en cas de succès : `owl` ne lit pas la réponse de la
+    /// mutation, il relance une requête de liste.
+    pub async fn merge_pull_request(
+        &self,
+        summary: &PrSummary,
+        node_id: Option<String>,
+        method: MergeMethod,
+    ) -> Result<(), GithubError> {
+        let identifiant = match node_id {
+            Some(valeur) => valeur,
+            None => self.fetch_detail(summary).await?.node_id,
+        };
+        let variables = json!({ "id": identifiant, "method": methode_graphql(method) });
+        // La réponse n'est pas modélisée : seule compte la distinction entre
+        // succès et erreur, que `execute` a déjà faite.
+        let _: serde_json::Value = self.execute(queries::MERGE, variables).await?;
+        Ok(())
+    }
+}
+
+/// Nom de la méthode dans le vocabulaire de GitHub. La traduction est ici et
+/// nulle part ailleurs : `model` ne connaît pas ces mots.
+fn methode_graphql(method: MergeMethod) -> &'static str {
+    match method {
+        MergeMethod::Squash => "SQUASH",
+        MergeMethod::Rebase => "REBASE",
+        MergeMethod::Merge => "MERGE",
+    }
 }
 
 /// Détecte une limite d'appels atteinte, primaire ou secondaire, et rend son
@@ -283,6 +316,47 @@ mod tests {
         });
 
         format!("http://{adresse}/graphql")
+    }
+
+    /// Sert plusieurs réponses HTTP figées d'affilée, une par connexion
+    /// acceptée, dans l'ordre donné. Rend l'adresse à viser et le corps de
+    /// chaque requête reçue, dans l'ordre où elles sont arrivées — c'est ce
+    /// qui permet de vérifier qu'un appel enchaîne bien deux requêtes, et
+    /// dans quel ordre.
+    async fn serveur_enchaine(
+        corps: &[&str],
+    ) -> (String, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        let ecoute = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("un port libre doit être disponible");
+        let adresse = ecoute.local_addr().expect("adresse locale");
+
+        let reponses: Vec<String> = corps
+            .iter()
+            .map(|corps| {
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    corps.len(),
+                    corps
+                )
+            })
+            .collect();
+
+        let (emetteur, recepteur) = tokio::sync::mpsc::unbounded_channel();
+
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            for reponse in reponses {
+                let (mut flux, _) = ecoute.accept().await.expect("connexion acceptée");
+                let mut tampon = [0u8; 8192];
+                let lu = flux.read(&mut tampon).await.unwrap_or(0);
+                let _ = emetteur.send(String::from_utf8_lossy(&tampon[..lu]).into_owned());
+                let _ = flux.write_all(reponse.as_bytes()).await;
+                let _ = flux.flush().await;
+            }
+        });
+
+        (format!("http://{adresse}/graphql"), recepteur)
     }
 
     async fn appel(
@@ -499,5 +573,107 @@ mod tests {
             .await
             .expect_err("erreur attendue");
         assert!(matches!(erreur, GithubError::NotFound));
+    }
+
+    /// Résumé minimal pour viser la mutation : seule la clé est lue quand
+    /// l'identifiant GraphQL est déjà connu.
+    fn resume_de_test() -> PrSummary {
+        use crate::model::{ChecksState, MergeableState, PrKey, RepoMergeRules, ReviewState};
+        PrSummary {
+            key: PrKey {
+                repo: "moi/depot".to_string(),
+                number: 142,
+            },
+            title: "Corrige la lecture des réglages".to_string(),
+            author: "moi".to_string(),
+            url: "https://github.com/moi/depot/pull/142".to_string(),
+            is_draft: false,
+            checks: ChecksState::Success,
+            review: ReviewState::Approved,
+            mergeable: MergeableState::Mergeable,
+            updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
+            repo_rules: RepoMergeRules {
+                squash: true,
+                merge: false,
+                rebase: false,
+                delete_branch_on_merge: true,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn une_fusion_reussie_ne_rend_rien() {
+        let corps =
+            r#"{"data":{"mergePullRequest":{"pullRequest":{"number":142,"state":"MERGED"}}}}"#;
+        let adresse = serveur("200 OK", &[], corps).await;
+        let client = Client::with_endpoint("jeton", &adresse).expect("client construit");
+
+        let resultat = client
+            .merge_pull_request(
+                &resume_de_test(),
+                Some("PR_identifiant".to_string()),
+                MergeMethod::Squash,
+            )
+            .await;
+
+        assert!(resultat.is_ok(), "{resultat:?}");
+    }
+
+    #[tokio::test]
+    async fn une_fusion_refusee_rend_le_message_de_github_tel_quel() {
+        let corps = r#"{"data":null,"errors":[{"message":"At least 1 approving review is required by reviewers with write access."}]}"#;
+        let adresse = serveur("200 OK", &[], corps).await;
+        let client = Client::with_endpoint("jeton", &adresse).expect("client construit");
+
+        let erreur = client
+            .merge_pull_request(
+                &resume_de_test(),
+                Some("PR_identifiant".to_string()),
+                MergeMethod::Squash,
+            )
+            .await
+            .expect_err("la mutation doit échouer");
+
+        assert_eq!(
+            erreur.to_string(),
+            "At least 1 approving review is required by reviewers with write access."
+        );
+    }
+
+    #[tokio::test]
+    async fn sans_identifiant_le_detail_est_demande_avant_la_mutation() {
+        const DETAIL: &str = include_str!("../../tests/fixtures/detail.json");
+        const MUTATION: &str =
+            r#"{"data":{"mergePullRequest":{"pullRequest":{"number":142,"state":"MERGED"}}}}"#;
+        let (adresse, mut requetes) = serveur_enchaine(&[DETAIL, MUTATION]).await;
+        let client = Client::with_endpoint("jeton", &adresse).expect("client construit");
+
+        let resultat = client
+            .merge_pull_request(&resume_de_test(), None, MergeMethod::Squash)
+            .await;
+
+        assert!(resultat.is_ok(), "{resultat:?}");
+
+        let premiere = requetes
+            .recv()
+            .await
+            .expect("la requête de détail doit être envoyée");
+        assert!(
+            premiere.contains("query Detail"),
+            "la première requête doit être le détail : {premiere}"
+        );
+
+        let seconde = requetes
+            .recv()
+            .await
+            .expect("la requête de mutation doit être envoyée");
+        assert!(
+            seconde.contains("mutation Merge"),
+            "la seconde requête doit être la mutation : {seconde}"
+        );
+        assert!(
+            seconde.contains("PR_kwDOABCD12345"),
+            "la mutation doit utiliser l'identifiant renvoyé par le détail : {seconde}"
+        );
     }
 }

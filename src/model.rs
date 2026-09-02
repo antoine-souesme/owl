@@ -5,10 +5,6 @@
 //! `github::dto`, seul endroit qui voit passer un `SUCCESS` ou un
 //! `nameWithOwner`.
 
-// Les specs 03 et 04 consomment la vue détail et les règles de fusion. D'ici
-// là, une partie de ces champs n'est lue que par les tests de traduction.
-#![allow(dead_code)]
-
 use chrono::{DateTime, Utc};
 
 /// Auteur affiché quand GitHub n'en renvoie aucun : le compte a été supprimé.
@@ -66,6 +62,39 @@ pub struct RepoMergeRules {
     pub merge: bool,
     pub rebase: bool,
     pub delete_branch_on_merge: bool,
+}
+
+/// Méthode de fusion. Le vocabulaire de GitHub — `SQUASH`, `REBASE`, `MERGE` —
+/// reste chez `github` ; ici, seule la notion métier.
+///
+/// Ce type vit dans `model` et non dans `config` parce que `github` en a
+/// besoin pour la mutation : le sens des dépendances interdit à `github` de
+/// connaître les réglages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeMethod {
+    Squash,
+    Rebase,
+    Merge,
+}
+
+impl RepoMergeRules {
+    /// Méthodes autorisées par le dépôt, dans l'ordre imposé par la spec :
+    /// écrasement, rebasage, commit de fusion. C'est aussi l'ordre de la
+    /// fenêtre de confirmation, et celui du repli quand la méthode préférée
+    /// n'est pas autorisée.
+    pub fn allowed(&self) -> Vec<MergeMethod> {
+        let mut methodes = Vec::new();
+        if self.squash {
+            methodes.push(MergeMethod::Squash);
+        }
+        if self.rebase {
+            methodes.push(MergeMethod::Rebase);
+        }
+        if self.merge {
+            methodes.push(MergeMethod::Merge);
+        }
+        methodes
+    }
 }
 
 /// Ce qu'il faut pour dessiner une ligne de liste.
@@ -171,5 +200,43 @@ mod tests {
         };
         assert_eq!(cle.owner(), "owl");
         assert_eq!(cle.name(), "");
+    }
+
+    /// Règles où tout est refusé, base des cas ci-dessous.
+    fn rien_autorise() -> RepoMergeRules {
+        RepoMergeRules {
+            squash: false,
+            merge: false,
+            rebase: false,
+            delete_branch_on_merge: false,
+        }
+    }
+
+    #[test]
+    fn un_depot_sans_methode_n_en_autorise_aucune() {
+        assert!(rien_autorise().allowed().is_empty());
+    }
+
+    #[test]
+    fn un_depot_qui_n_autorise_que_l_ecrasement_ne_rend_que_l_ecrasement() {
+        let regles = RepoMergeRules {
+            squash: true,
+            ..rien_autorise()
+        };
+        assert_eq!(regles.allowed(), vec![MergeMethod::Squash]);
+    }
+
+    #[test]
+    fn les_methodes_sont_rendues_dans_l_ordre_ecrasement_rebasage_fusion() {
+        let regles = RepoMergeRules {
+            squash: true,
+            merge: true,
+            rebase: true,
+            delete_branch_on_merge: true,
+        };
+        assert_eq!(
+            regles.allowed(),
+            vec![MergeMethod::Squash, MergeMethod::Rebase, MergeMethod::Merge]
+        );
     }
 }

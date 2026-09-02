@@ -113,6 +113,9 @@ refresh_interval = 60
 
 # Méthode de fusion présélectionnée quand le dépôt en autorise plusieurs.
 # Valeurs acceptées : "squash", "rebase", "merge".
+# config::MergeMethod est une réexportation de model::MergeMethod : le type
+# appartient au modèle, `github` en a besoin pour la mutation et n'a pas le
+# droit de dépendre des réglages.
 preferred_merge_method = "squash"
 
 # Nombre maximal de PR ramenées par requête (1 à 100).

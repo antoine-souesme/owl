@@ -52,50 +52,94 @@ Une fenêtre centrée, par-dessus la liste, qui capte tout le clavier.
 └────────────────────────────────────────────┘
 ```
 
-Seules les méthodes autorisées par le dépôt sont listées. La sélection initiale est
+Seules les méthodes autorisées par le dépôt sont listées, dans l'ordre écrasement,
+rebasage, commit de fusion — c'est `RepoMergeRules::allowed()` qui rend cet ordre,
+et nulle part ailleurs qu'il est recalculé. La sélection initiale est
 `preferred_merge_method` des réglages si cette méthode est autorisée, sinon la
-première de la liste dans l'ordre écrasement, rebasage, commit de fusion.
+première de la liste.
 
 Quand une seule méthode est autorisée, la liste est remplacée par une ligne
 « Méthode : écraser les commits (imposé par le dépôt) », et la fenêtre ne demande plus
 que la confirmation.
 
-`Entrée` confirme, `Échap` annule, les flèches haut et bas changent de méthode. Aucune
-autre touche n'agit.
+`Entrée` confirme, `Échap` annule, les flèches haut et bas changent de méthode sans
+boucler. Aucune autre touche n'agit — sauf `Ctrl-C`, qui quitte `owl` même fenêtre
+ouverte : le mode brut l'a désarmée, et c'est à `owl` de l'honorer, sans quoi la
+seule sortie serait de tuer le terminal. `q`, lui, ne quitte pas tant que la fenêtre
+est ouverte. Tant qu'elle l'est, la barre d'état affiche
+« ↑↓ choisir · Entrée confirmer · Échap annuler » à la place de l'aide clavier
+habituelle.
 
 ```rust
 struct MergeDialog {
     key: PrKey,
     title: String,
-    methods: Vec<MergeMethod>,   // uniquement celles autorisées
+    methods: Vec<MergeMethod>,   // uniquement celles autorisées, dans l'ordre ci-dessus
     selected: usize,
     state: MergeDialogState,
+}
+
+impl MergeDialog {
+    fn method(&self) -> Option<MergeMethod>;   // méthode sous le curseur
 }
 
 enum MergeDialogState { Choosing, Submitting, Failed(String) }
 ```
 
+`App` porte `merge: Option<MergeDialog>` et `notice: Option<String>`. Tant que
+`merge` contient une fenêtre, elle capte tout le clavier et le rafraîchissement
+automatique ne touche plus à la liste. `notice` porte les motifs de refus de `m`
+et l'annonce d'une fusion réussie ; il s'affiche dans la barre d'état au même rang
+que l'erreur de GitHub — sinon le rafraîchissement qui suit une fusion réussie
+effacerait aussitôt son annonce — et s'efface au premier appui sur une touche, une
+fois la fenêtre fermée.
+
+Libellés exacts des méthodes dans la liste : « Écraser les commits (squash) »,
+« Rebaser (rebase) », « Créer un commit de fusion (merge) ». La ligne à méthode
+unique et l'état `Submitting` utilisent la forme courte, sans capitale ni
+parenthèse : « écraser les commits », « rebaser », « créer un commit de fusion ».
+
+`app` expose la fenêtre sous la forme d'un `MergeRender { title, lines }` : un
+titre de cadre et des lignes déjà écrites, chevron de sélection compris. Toute la
+composition — le chevron, les libellés, la phrase « imposé par le dépôt », le
+message d'attente — est décidée dans `app/render.rs`. `merge_render` reçoit la
+largeur disponible, exactement comme `status_line(width)`, et replie lui-même
+chaque ligne contre une largeur de contenu bornée — sur les limites de mots quand
+c'est possible, sans jamais perdre de contenu — pour qu'un message de GitHub trop
+long pour tenir sur une ligne s'affiche entier, replié, plutôt que tronqué.
+`ui/merge.rs` ne calcule que la taille et le centrage des lignes déjà repliées,
+efface le fond et dessine le cadre.
+
 ## Déroulement de la fusion
 
-À la confirmation, la fenêtre passe en `Submitting` et affiche « fusion en cours »
-sans se fermer — fermer la fenêtre pendant l'appel donnerait l'impression que c'est
-fini.
+À la confirmation, la fenêtre passe en `Submitting` et affiche « Fusion en
+cours… » sans se fermer — fermer la fenêtre pendant l'appel donnerait l'impression
+que c'est fini. Aucune touche n'agit tant qu'elle est dans cet état, `Échap`
+comprise.
 
 La mutation a besoin de l'identifiant GraphQL de la PR, absent de la requête de
-liste. Si le détail de la PR est en cache, l'identifiant y est. Sinon, `owl` le
-récupère d'abord par la requête de détail, puis enchaîne la mutation. Cet
-enchaînement est invisible pour l'utilisateur, hormis un temps d'attente un peu plus
-long.
+liste. C'est `github::merge_pull_request` qui fait l'enchaînement « détail puis
+mutation » : il reçoit un `node_id: Option<String>` et, quand il vaut `None`,
+récupère d'abord le détail de la PR pour en prendre l'identifiant, avant
+d'enchaîner la mutation. Cet enchaînement est invisible pour l'utilisateur,
+hormis un temps d'attente un peu plus long. Le détail ainsi récupéré n'entre pas
+dans le cache de `app` : le rafraîchissement qui suit une fusion réussie le
+rendrait aussitôt périmé.
 
-En cas de succès : la fenêtre se ferme, la barre d'état affiche
+Aucun compteur de génération ne protège cet appel : une seule fusion peut être en
+vol, la fenêtre bloquant le clavier pendant l'attente. Un `MergeFinished` dont la
+clé ne correspond pas à la fenêtre ouverte est simplement ignoré.
+
+En cas de succès : la fenêtre se ferme, la notice affiche
 « org/dépôt #142 fusionnée », et une requête de liste est lancée immédiatement. La PR
 disparaît de la liste au rafraîchissement, et la sélection suit la règle de
 `03-affichage-et-navigation.md`.
 
 En cas d'échec : la fenêtre passe en `Failed` et affiche le message d'erreur de
-GitHub tel quel. C'est délibéré — « Base branch was modified » ou « At least 1
-approving review is required » disent exactement quoi faire, là où un message maison
-brouillerait la cause. `Échap` ferme, `Entrée` réessaie avec la même méthode.
+GitHub tel quel, suivi de « Entrée pour réessayer · Échap pour fermer ». C'est
+délibéré — « Base branch was modified » ou « At least 1 approving review is
+required » disent exactement quoi faire, là où un message maison brouillerait la
+cause. `Échap` ferme, `Entrée` réessaie avec la même méthode.
 
 ## Suppression de la branche
 
@@ -109,19 +153,6 @@ en informer l'utilisateur si besoin.
 Pas de fusion de plusieurs PR d'un coup, pas de fusion automatique en attente des
 vérifications, pas de modification du titre ou du message de commit de fusion. Une
 fusion, une confirmation.
-
-## Note d'implémentation
-
-Les fondations lisent et valident `preferred_merge_method` dans les réglages, mais
-ne s'en servent pas encore : le champ de `config::Config` est renseigné et laissé
-de côté. Cette spec est celle qui lui donne son usage. `ui/merge.rs` est vide
-jusque-là.
-
-La touche `m` est déjà reconnue par `app` depuis
-`03-affichage-et-navigation.md`, où elle ne fait rien : ni `MergeDialog`, ni
-contrôles avant fusion. Cette spec apporte le champ `merge` de `App`, la
-fenêtre, la capture du clavier, et le fait qu'un `Tick` ne rafraîchisse pas la
-liste tant que la fenêtre est ouverte.
 
 ## Critères de réussite
 

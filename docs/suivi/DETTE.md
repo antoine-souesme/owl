@@ -20,6 +20,15 @@ Une entrée par point, la plus récente en haut.
 
 ---
 
+### Confirmer une fusion sur une pull request disparue ne produit rien
+
+- **Origine** : plan `2026-09-02-fusion`, revue finale de la branche.
+- **Ce qui est différé** : `App::submit_merge` cherche le résumé de la pull request visée par `resume_affiche`. Si la PR a disparu à la fois de la liste et du cache de détails entre l'ouverture de la fenêtre et la confirmation, la fonction rend une liste de commandes vide sans rien changer : la fenêtre reste en `Choosing` et `Entrée` semble ne rien faire. Le cas se produit quand une réponse de liste déjà en vol au moment de l'appui sur `m` retire la PR.
+- **Pourquoi** : le correctif demande un message d'écran qu'aucune spec ne définit, et la fenêtre reste fermable par `Échap` : le défaut est silencieux, pas bloquant.
+- **Ce qu'il faudrait faire** : décider du message dans `docs/specs/04-fusion.md`, puis, dans ce cas, fermer la fenêtre et poser ce message dans `notice`.
+
+---
+
 ### Une liste de filtres composée uniquement de chaînes blanches n'est pas refusée
 
 - **Origine** : plan `2026-09-02-filtres`, revue finale de la branche.

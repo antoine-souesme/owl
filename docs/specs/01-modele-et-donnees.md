@@ -45,6 +45,8 @@ struct RepoMergeRules {
     delete_branch_on_merge: bool,
 }
 
+enum MergeMethod { Squash, Rebase, Merge }
+
 /// Ce qu'il faut en plus pour dessiner la vue détail.
 struct PrDetail {
     summary: PrSummary,
@@ -69,6 +71,11 @@ struct ChangedFile { path: String, additions: u32, deletions: u32 }
 `RepoMergeRules` est porté par `PrSummary` et non par une structure de dépôt séparée :
 l'information arrive dans la même requête que la liste, et la fenêtre de fusion en a
 besoin sans appel supplémentaire.
+
+`RepoMergeRules::allowed()` rend les méthodes autorisées, dans l'ordre écrasement,
+rebasage, commit de fusion. C'est la seule source de cet ordre : il n'est recalculé
+nulle part ailleurs. `MergeMethod` vit dans `model`, et non dans `config`, parce que
+`github` en a besoin pour la mutation et n'a pas le droit de dépendre des réglages.
 
 ## Traduction des états
 
@@ -210,6 +217,9 @@ mutation Merge($id: ID!, $method: PullRequestMergeMethod!) {
 La fusion a besoin de l'identifiant GraphQL de la PR, absent de la requête de liste.
 Il est donc récupéré juste avant la fusion si la vue détail n'a pas déjà été ouverte.
 Ce point est détaillé en `04-fusion.md`.
+
+La traduction de `MergeMethod` vers `SQUASH`, `REBASE` et `MERGE` est faite par
+`github`, et nulle part ailleurs : `model` ne connaît pas ce vocabulaire.
 
 La suppression de la branche après fusion n'est pas demandée par `owl` : elle suit le
 réglage `deleteBranchOnMerge` du dépôt, appliqué par GitHub lui-même.

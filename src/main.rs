@@ -188,6 +188,22 @@ fn execute_command(
                 });
             });
         }
+        Command::Merge {
+            summary,
+            node_id,
+            method,
+        } => {
+            let envoi = envoi.clone();
+            let client = client.clone();
+            let cle = summary.key.clone();
+            tokio::spawn(async move {
+                let resultat = client.merge_pull_request(&summary, node_id, method).await;
+                let _ = envoi.send(Event::MergeFinished {
+                    key: cle,
+                    result: resultat,
+                });
+            });
+        }
         Command::OpenInBrowser { url } => {
             // Dans une tâche bloquante : lancer le navigateur peut prendre un
             // instant, et l'écran doit rester réactif pendant ce temps.
@@ -223,8 +239,18 @@ fn spawn_keyboard(envoi: UnboundedSender<Event>) {
             }
         }
 
-        let Ok(TerminalEvent::Key(touche)) = crossterm::event::read() else {
-            continue;
+        let touche = match crossterm::event::read() {
+            Ok(TerminalEvent::Key(touche)) => touche,
+            // Le redimensionnement remonte à `app` pour que la boucle
+            // redessine : sans lui, l'écran reste figé à l'ancienne taille
+            // jusqu'à la touche ou le tour de minuteur suivant.
+            Ok(TerminalEvent::Resize(..)) => {
+                if envoi.send(Event::Resize).is_err() {
+                    return;
+                }
+                continue;
+            }
+            _ => continue,
         };
         if touche.kind != KeyEventKind::Press {
             continue;
