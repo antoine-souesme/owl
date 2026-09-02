@@ -117,8 +117,6 @@ ne s'en servent pas encore : le champ de `config::Config` est renseigné et lais
 de côté. Cette spec est celle qui lui donne son usage. `ui/merge.rs` est vide
 jusque-là.
 
-## Note d'implémentation
-
 La touche `m` est déjà reconnue par `app` depuis
 `03-affichage-et-navigation.md`, où elle ne fait rien : ni `MergeDialog`, ni
 contrôles avant fusion. Cette spec apporte le champ `merge` de `App`, la
