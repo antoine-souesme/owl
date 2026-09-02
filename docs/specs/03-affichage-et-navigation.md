@@ -46,6 +46,7 @@ lu.
 enum Event {
     Key(Key),
     Tick,
+    Resize,
     Quit,
     ListLoaded { generation: Generation, result: Result<ListPage> },
     DetailLoaded { generation: Generation, key: PrKey, result: Result<PrDetail> },
@@ -66,6 +67,13 @@ impl App {
 `Event::ListLoaded` transporte un `ListPage` : les pull requests et le solde
 d'appels lu au passage voyagent ensemble depuis `01-modele-et-donnees.md`, les
 séparer imposerait un second canal pour la même réponse.
+
+`Event::Resize` dit que le terminal a changé de taille. `app` n'en fait rien : il
+ne renvoie aucune commande, ne touche pas à l'état et n'efface pas le message en
+cours — un redimensionnement n'est pas un appui sur une touche. Il existe pour que
+la boucle principale redessine, puisqu'elle ne redessine qu'après un événement.
+Sans lui, l'écran resterait figé à l'ancienne taille jusqu'à la touche ou au tour
+de minuteur suivant.
 
 `Event::Quit` est l'arrêt demandé par la boucle principale : le crochet de panique
 en a besoin pour débloquer la boucle après avoir rendu le terminal.
@@ -250,3 +258,5 @@ Tous vérifiables sans terminal, en envoyant des événements à `App` :
   les bornes de la nouvelle liste.
 - Un résultat de liste portant une génération périmée est ignoré.
 - Un `Tick` reçu pendant un chargement de liste n'émet pas de seconde requête.
+- Un `Resize` n'émet aucune commande, ne déplace pas la sélection, ne change pas de
+  vue et n'efface pas le message en cours.

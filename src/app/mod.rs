@@ -52,6 +52,10 @@ pub enum Event {
     Key(Key),
     /// Tour de minuteur de rafraîchissement.
     Tick,
+    /// Le terminal a changé de taille. Rien à décider : la boucle redessine
+    /// après chaque événement, et c'est ce redessin qui remet l'écran à la
+    /// bonne dimension.
+    Resize,
     /// Arrêt demandé par `main` : panique d'une tâche, ou clavier hors service.
     Quit,
     /// Résultat d'une requête de liste.
@@ -250,6 +254,10 @@ impl App {
                 self.should_quit = true;
                 vec![Command::Quit]
             }
+            // Le redessin suffit : l'état ne change pas avec la taille de
+            // l'écran, et le message en cours n'est pas effacé — un
+            // redimensionnement n'est pas un appui sur une touche.
+            Event::Resize => Vec::new(),
             // Une requête de liste déjà en vol suffit, et la liste ne change
             // pas sous une fenêtre de fusion ouverte : le tour est perdu, le
             // suivant s'en chargera.
@@ -1044,6 +1052,33 @@ pub(crate) mod tests {
         let mut app = app_fenetre_ouverte(pr_avec_regles(1, tout_autorise()));
         let commandes = app.handle(Event::Tick);
         assert!(commandes.is_empty(), "{commandes:?}");
+    }
+
+    #[test]
+    fn un_redimensionnement_ne_demande_rien_et_ne_change_rien() {
+        let mut app = app_garnie(vec![pr(1), pr(2)]);
+        app.handle(Event::Key(Key::Down));
+        let avant = app.selected;
+
+        let commandes = app.handle(Event::Resize);
+
+        assert!(commandes.is_empty(), "{commandes:?}");
+        assert_eq!(app.selected, avant);
+        assert_eq!(app.view, View::List);
+    }
+
+    #[test]
+    fn un_redimensionnement_n_efface_pas_le_message_en_cours() {
+        let brouillon = PrSummary {
+            is_draft: true,
+            ..pr(1)
+        };
+        let mut app = app_fenetre_ouverte(brouillon);
+        assert!(app.notice.is_some());
+
+        app.handle(Event::Resize);
+
+        assert!(app.notice.is_some());
     }
 
     /// Détail minimal portant l'identifiant GraphQL demandé.
