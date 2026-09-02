@@ -94,6 +94,15 @@ besoin sans appel supplémentaire.
 renvoie `UNKNOWN` le temps du calcul ; `owl` traite `UNKNOWN` comme « on ne sait pas
 encore » et non comme un blocage.
 
+Les cas que l'API laisse ouverts sont tranchés ainsi :
+
+| Situation | Traduction |
+|---|---|
+| `author` à `null` (compte supprimé) | auteur affiché « inconnu » |
+| Aucun commit, ou `statusCheckRollup` absent | `ChecksState::None` |
+| Valeur d'état inconnue de la table | traitée comme une absence : `None`, ou `Unknown` pour `mergeable` |
+| Nœud sans les champs d'une pull request | ignoré, sans erreur |
+
 ## Requête de liste
 
 Une seule requête, du type `search`, portant la chaîne construite par le module
@@ -173,6 +182,26 @@ derniers commentaires, les cent premiers fichiers. Il n'y a pas de pagination da
 vue détail. Quand une liste est tronquée, l'écran l'indique par une ligne
 « … et N de plus ».
 
+Les états qui n'existent que dans la vue détail sont traduits ainsi :
+
+| Situation | Traduction |
+|---|---|
+| `CheckRun` dont `status` n'est pas `COMPLETED` | `Pending` — la conclusion n'existe pas encore |
+| `CheckRun` de conclusion `SUCCESS` | `Success` |
+| `CheckRun` de conclusion `NEUTRAL` ou `SKIPPED` | `None` — aucun verdict sur le code |
+| `CheckRun` de toute autre conclusion | `Failure` |
+| `StatusContext` | table du `statusCheckRollup`, sur son champ `state` |
+| Nœud d'aucune des deux formes | ignoré |
+| Relecture d'état `APPROVED` / `CHANGES_REQUESTED` | `Approved` / `ChangesRequested` |
+| Relecture d'un autre état (`COMMENTED`, `DISMISSED`, `PENDING`) | `None` |
+| Relecture sans `submittedAt` (en attente, jamais soumise) | ignorée |
+
+La ligne « … et N de plus » n'est pas réalisable avec cette requête : elle ne
+demande aucun `totalCount`, et une liste bornée à vingt éléments qui en renvoie
+vingt est indiscernable d'une liste complète de vingt. La spec 03, qui possède cet
+affichage, tranchera entre ajouter les `totalCount` à la requête et abandonner la
+ligne.
+
 ## Mutation de fusion
 
 ```graphql
@@ -201,15 +230,38 @@ traitement des erreurs :
 - succès, avec des données ;
 - réponse HTTP 200 contenant un tableau `errors` — erreur applicative ;
 - réponse HTTP 401 ou 403 — jeton invalide ou droits insuffisants ;
-- limite d'appels atteinte, reconnue à la réponse 403 accompagnée d'un en-tête de
-  réinitialisation, ou à un `rateLimit.remaining` nul.
+- limite d'appels atteinte. GitHub pose les en-têtes `x-ratelimit-*` sur la
+  quasi-totalité de ses réponses, refus de droits compris : leur seule présence
+  ne dit rien. C'est le solde `x-ratelimit-remaining` à zéro qui signale la
+  limite primaire atteinte. La limite secondaire se reconnaît à l'en-tête
+  `retry-after`, un délai en secondes converti en heure de reprise. Une réponse
+  429 est traitée comme une 403.
 
 ## Note d'implémentation
 
-Les fondations laissent un bouchon : `github::fetch_pull_requests` renvoie une
-liste vide sans toucher au réseau, et son erreur est un simple `String`. Cette
-spec remplace le corps de la fonction et substitue au `String` un type d'erreur
-`thiserror`. Le type `app::Event::Data` change en conséquence.
+Les fondations laissaient un bouchon : `github::fetch_pull_requests` renvoyait une
+liste vide sans toucher au réseau, et son erreur était un simple `String`. Cette
+spec le remplace par `github::Client`, dont l'erreur est le type `thiserror`
+`GithubError`. Trois conséquences :
+
+- `app::Event::Data` porte `Result<ListPage, GithubError>`. `app` connaît donc le
+  type d'erreur de `github`, ce que les règles de dépendance autorisent : elles
+  interdisent à `github` de connaître `app`, pas l'inverse, et `app` ne gagne
+  aucun appel réseau au passage.
+- Le solde d'appels voyage avec la liste, dans `ListPage { pull_requests,
+  rate_limit }`. Un `rateLimit.remaining` nul dans une réponse réussie n'est pas
+  une erreur : les données sont rendues, le solde est transmis, et la suspension
+  du rafraîchissement reste le sujet de `05-erreurs-et-tests.md`.
+  `GithubError::RateLimited` est réservé au refus de GitHub, reconnu au solde
+  `x-ratelimit-remaining` à zéro ou à l'en-tête `retry-after` d'une limite
+  secondaire.
+- La chaîne de recherche est, jusqu'à `02-filtres.md`, la simple jointure des
+  filtres des réglages. `is:pr` n'est pas ajouté ici : c'est une règle de
+  `build_query`, et la dupliquer serait la faire vivre à deux endroits.
+
+La mutation de fusion est posée en constante dans `github::queries`, et n'est
+appelée par aucune fonction à ce stade : son déclenchement, comme le choix de la
+méthode, appartient à `04-fusion.md`.
 
 ## Critères de réussite
 

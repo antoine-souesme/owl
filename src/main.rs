@@ -107,7 +107,9 @@ fn restore_terminal() {
 
 async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
     let intervalle = reglages.refresh_interval;
-    let jeton = Arc::new(jeton);
+    // Le client est construit une fois pour toutes : il porte le jeton dans
+    // ses en-têtes, et c'est le seul endroit du programme où le jeton reste.
+    let client = Arc::new(github::Client::new(jeton.expose())?);
     let mut etat = App::new(reglages);
 
     let (envoi, mut reception) = mpsc::unbounded_channel::<Event>();
@@ -127,14 +129,14 @@ async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
     // Producteur 3 : les résultats réseau, une tâche par demande.
     // `start` ne demande jamais l'arrêt : son résultat n'a rien à décider.
     for commande in etat.start() {
-        execute_command(commande, &envoi, &jeton);
+        execute_command(commande, &envoi, &client);
     }
     terminal.draw(|cadre| ui::draw(cadre, &etat))?;
 
     while let Some(evenement) = reception.recv().await {
         let mut arret = false;
         for commande in etat.handle(evenement) {
-            arret |= execute_command(commande, &envoi, &jeton);
+            arret |= execute_command(commande, &envoi, &client);
         }
         if arret {
             break;
@@ -151,7 +153,7 @@ async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
 fn execute_command(
     commande: Command,
     envoi: &UnboundedSender<Event>,
-    jeton: &Arc<token::Token>,
+    client: &Arc<github::Client>,
 ) -> bool {
     match commande {
         Command::Quit => return true,
@@ -161,10 +163,9 @@ fn execute_command(
             page_size,
         } => {
             let envoi = envoi.clone();
-            let jeton = jeton.clone();
+            let client = client.clone();
             tokio::spawn(async move {
-                let resultat =
-                    github::fetch_pull_requests(jeton.expose(), &filters, page_size).await;
+                let resultat = client.fetch_pull_requests(&filters, page_size).await;
                 let _ = envoi.send(Event::Data {
                     generation,
                     result: resultat,

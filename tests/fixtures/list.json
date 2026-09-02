@@ -1,0 +1,108 @@
+{
+  "data": {
+    "search": {
+      "nodes": [
+        {
+          "number": 42,
+          "title": "Ajoute la fenêtre de fusion",
+          "url": "https://github.com/moi/owl/pull/42",
+          "isDraft": false,
+          "mergeable": "MERGEABLE",
+          "reviewDecision": "APPROVED",
+          "updatedAt": "2026-08-30T09:12:44Z",
+          "author": { "login": "moi" },
+          "repository": {
+            "nameWithOwner": "moi/owl",
+            "squashMergeAllowed": true,
+            "mergeCommitAllowed": false,
+            "rebaseMergeAllowed": true,
+            "deleteBranchOnMerge": true
+          },
+          "commits": {
+            "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }]
+          }
+        },
+        {},
+        {
+          "number": 7,
+          "title": "Brouillon sans intégration continue",
+          "url": "https://github.com/moi/notes/pull/7",
+          "isDraft": true,
+          "mergeable": "UNKNOWN",
+          "reviewDecision": null,
+          "updatedAt": "2026-08-29T18:03:00Z",
+          "author": null,
+          "repository": {
+            "nameWithOwner": "moi/notes",
+            "squashMergeAllowed": false,
+            "mergeCommitAllowed": true,
+            "rebaseMergeAllowed": false,
+            "deleteBranchOnMerge": false
+          },
+          "commits": { "nodes": [] }
+        },
+        {
+          "number": 13,
+          "title": "Corrige la troncature des titres",
+          "url": "https://github.com/uneorg/site/pull/13",
+          "isDraft": false,
+          "mergeable": "CONFLICTING",
+          "reviewDecision": "CHANGES_REQUESTED",
+          "updatedAt": "2026-08-28T07:45:10Z",
+          "author": { "login": "camille" },
+          "repository": {
+            "nameWithOwner": "uneorg/site",
+            "squashMergeAllowed": true,
+            "mergeCommitAllowed": true,
+            "rebaseMergeAllowed": false,
+            "deleteBranchOnMerge": false
+          },
+          "commits": {
+            "nodes": [{ "commit": { "statusCheckRollup": { "state": "PENDING" } } }]
+          }
+        },
+        {
+          "number": 99,
+          "title": "Migre vers ratatui 0.30",
+          "url": "https://github.com/moi/owl/pull/99",
+          "isDraft": false,
+          "mergeable": "MERGEABLE",
+          "reviewDecision": "REVIEW_REQUIRED",
+          "updatedAt": "2026-08-27T22:00:00Z",
+          "author": { "login": "moi" },
+          "repository": {
+            "nameWithOwner": "moi/owl",
+            "squashMergeAllowed": true,
+            "mergeCommitAllowed": false,
+            "rebaseMergeAllowed": true,
+            "deleteBranchOnMerge": true
+          },
+          "commits": {
+            "nodes": [{ "commit": { "statusCheckRollup": { "state": "FAILURE" } } }]
+          }
+        },
+        {
+          "number": 3,
+          "title": "Dépôt sans intégration continue configurée",
+          "url": "https://github.com/moi/notes/pull/3",
+          "isDraft": false,
+          "mergeable": "MERGEABLE",
+          "reviewDecision": null,
+          "updatedAt": "2026-08-26T11:20:00Z",
+          "author": { "login": "moi" },
+          "repository": {
+            "nameWithOwner": "moi/notes",
+            "squashMergeAllowed": false,
+            "mergeCommitAllowed": true,
+            "rebaseMergeAllowed": false,
+            "deleteBranchOnMerge": false
+          },
+          "commits": {
+            "nodes": [{ "commit": { "statusCheckRollup": null } }]
+          }
+        }
+      ]
+    },
+    "rateLimit": { "remaining": 4987, "resetAt": "2026-08-30T10:00:00Z" }
+  }
+}

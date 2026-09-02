@@ -8,7 +8,8 @@
 use chrono::{DateTime, Local};
 
 use crate::config::Config;
-use crate::model::PullRequest;
+use crate::github::GithubError;
+use crate::model::{ListPage, PrSummary};
 
 /// Numéro de génération d'une demande réseau. Un résultat dont la génération
 /// est périmée est ignoré, ce qui évite qu'une réponse lente écrase une
@@ -35,7 +36,7 @@ pub enum Event {
     /// Résultat d'une demande réseau.
     Data {
         generation: Generation,
-        result: Result<Vec<PullRequest>, String>,
+        result: Result<ListPage, GithubError>,
     },
 }
 
@@ -57,13 +58,18 @@ pub enum Command {
 }
 
 pub struct App {
-    pub items: Vec<PullRequest>,
+    pub items: Vec<PrSummary>,
     /// Message principal de la barre d'état : le résumé de la liste, ou
     /// l'erreur en cours. Vide tant qu'aucune réponse n'est arrivée.
     pub status: String,
     pub loading: bool,
     pub should_quit: bool,
     pub last_refresh: Option<DateTime<Local>>,
+    /// Solde d'appels rapporté par la dernière requête réussie. Conservé ici
+    /// parce que la spec 01 le demande ; la suspension du rafraîchissement
+    /// qu'il déclenche appartient à `05-erreurs-et-tests.md`.
+    #[allow(dead_code)]
+    pub rate_limit: Option<crate::model::RateLimit>,
     generation: Generation,
     config: Config,
 }
@@ -76,6 +82,7 @@ impl App {
             loading: false,
             should_quit: false,
             last_refresh: None,
+            rate_limit: None,
             generation: 0,
             config,
         }
@@ -105,13 +112,14 @@ impl App {
                 }
                 self.loading = false;
                 match result {
-                    Ok(items) => {
-                        self.items = items;
+                    Ok(page) => {
+                        self.items = page.pull_requests;
+                        self.rate_limit = page.rate_limit;
                         self.last_refresh = Some(Local::now());
                         self.status = self.liste_resumee();
                     }
                     // Message de GitHub repris tel quel, et liste conservée.
-                    Err(message) => self.status = message,
+                    Err(erreur) => self.status = erreur.to_string(),
                 }
                 Vec::new()
             }
@@ -169,11 +177,39 @@ impl App {
 mod tests {
     use super::*;
 
-    fn pr(numero: u32) -> PullRequest {
-        PullRequest {
-            repository: "moi/depot".to_string(),
-            number: numero,
+    use crate::model::{
+        ChecksState, ListPage, MergeableState, PrKey, PrSummary, RepoMergeRules, ReviewState,
+    };
+
+    fn pr(numero: u32) -> PrSummary {
+        PrSummary {
+            key: PrKey {
+                repo: "moi/depot".to_string(),
+                number: numero,
+            },
             title: format!("Titre {numero}"),
+            author: "moi".to_string(),
+            url: format!("https://github.com/moi/depot/pull/{numero}"),
+            is_draft: false,
+            checks: ChecksState::Success,
+            review: ReviewState::Approved,
+            mergeable: MergeableState::Mergeable,
+            updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
+            repo_rules: RepoMergeRules {
+                squash: true,
+                merge: false,
+                rebase: true,
+                delete_branch_on_merge: true,
+            },
+        }
+    }
+
+    /// Réponse de liste sans solde d'appels, suffisante partout où seul le
+    /// contenu de la liste compte.
+    fn page(pull_requests: Vec<PrSummary>) -> ListPage {
+        ListPage {
+            pull_requests,
+            rate_limit: None,
         }
     }
 
@@ -245,7 +281,7 @@ mod tests {
         let (mut app, generation) = app_demarree();
         let commandes = app.handle(Event::Data {
             generation,
-            result: Ok(vec![pr(1), pr(2)]),
+            result: Ok(page(vec![pr(1), pr(2)])),
         });
         assert!(commandes.is_empty());
         assert_eq!(app.items, vec![pr(1), pr(2)]);
@@ -258,13 +294,13 @@ mod tests {
         let (mut app, generation) = app_demarree();
         app.handle(Event::Data {
             generation,
-            result: Ok(vec![pr(1)]),
+            result: Ok(page(vec![pr(1)])),
         });
         // Une nouvelle requête part, puis la réponse lente de l'ancienne arrive.
         app.handle(Event::Key(Key::Char('r')));
         let commandes = app.handle(Event::Data {
             generation,
-            result: Ok(vec![pr(99)]),
+            result: Ok(page(vec![pr(99)])),
         });
         assert!(commandes.is_empty());
         assert_eq!(
@@ -280,7 +316,7 @@ mod tests {
         let (mut app, generation) = app_demarree();
         app.handle(Event::Data {
             generation,
-            result: Ok(vec![pr(1)]),
+            result: Ok(page(vec![pr(1)])),
         });
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::Fetch { generation, .. } => *generation,
@@ -288,10 +324,10 @@ mod tests {
         };
         app.handle(Event::Data {
             generation,
-            result: Err("Réseau injoignable".to_string()),
+            result: Err(GithubError::Transport),
         });
         assert_eq!(app.items, vec![pr(1)], "la liste précédente reste visible");
-        assert_eq!(app.status, "Réseau injoignable", "message repris tel quel");
+        assert_eq!(app.status, "Réseau injoignable.", "message repris tel quel");
         assert!(!app.loading);
     }
 
@@ -300,7 +336,7 @@ mod tests {
         let (mut app, generation) = app_demarree();
         app.handle(Event::Data {
             generation,
-            result: Err("Réseau injoignable".to_string()),
+            result: Err(GithubError::Transport),
         });
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::Fetch { generation, .. } => *generation,
@@ -308,7 +344,7 @@ mod tests {
         };
         app.handle(Event::Data {
             generation,
-            result: Ok(vec![pr(1)]),
+            result: Ok(page(vec![pr(1)])),
         });
         assert!(
             !app.status.contains("Réseau injoignable"),
@@ -322,7 +358,7 @@ mod tests {
         let (mut app, generation) = app_demarree();
         app.handle(Event::Data {
             generation,
-            result: Ok(vec![pr(1), pr(2)]),
+            result: Ok(page(vec![pr(1), pr(2)])),
         });
         assert!(app.status.starts_with("2 pull requests"), "{}", app.status);
 
@@ -332,7 +368,7 @@ mod tests {
         };
         app.handle(Event::Data {
             generation,
-            result: Ok(vec![]),
+            result: Ok(page(vec![])),
         });
         assert_eq!(app.status, "Aucune pull request");
     }
@@ -355,14 +391,14 @@ mod tests {
         // La réponse de la requête abandonnée arrive après : elle est jetée.
         app.handle(Event::Data {
             generation: premiere,
-            result: Ok(vec![pr(1)]),
+            result: Ok(page(vec![pr(1)])),
         });
         assert!(app.items.is_empty(), "la première réponse doit être jetée");
         assert!(app.loading, "la seconde requête reste en cours");
 
         app.handle(Event::Data {
             generation: seconde,
-            result: Ok(vec![pr(2)]),
+            result: Ok(page(vec![pr(2)])),
         });
         assert_eq!(app.items, vec![pr(2)]);
         assert!(!app.loading);
@@ -396,7 +432,7 @@ mod tests {
         let (mut app, generation) = app_demarree();
         app.handle(Event::Data {
             generation,
-            result: Ok(vec![pr(1), pr(2)]),
+            result: Ok(page(vec![pr(1), pr(2)])),
         });
         let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
         assert_eq!(
@@ -410,7 +446,7 @@ mod tests {
         let (mut app, generation) = app_demarree();
         app.handle(Event::Data {
             generation,
-            result: Ok(vec![pr(1)]),
+            result: Ok(page(vec![pr(1)])),
         });
         app.handle(Event::Key(Key::Char('r')));
         let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
@@ -427,11 +463,11 @@ mod tests {
         let (mut app, generation) = app_demarree();
         app.handle(Event::Data {
             generation,
-            result: Err("Réseau injoignable".to_string()),
+            result: Err(GithubError::Transport),
         });
         assert_eq!(
             app.status_line(),
-            "Réseau injoignable · q quitter · r rafraîchir",
+            "Réseau injoignable. · q quitter · r rafraîchir",
             "aucune heure : aucun rafraîchissement n'a encore réussi"
         );
     }
