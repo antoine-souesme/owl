@@ -6,8 +6,6 @@
 //!
 //! Le module est pur : ni réseau, ni terminal, ni réglages.
 
-#![allow(dead_code)]
-
 /// Un filtre de recherche. Chaque variante sait produire son fragment de
 /// chaîne ; c'est GitHub qui filtre, `owl` ne filtre jamais en mémoire.
 #[derive(Debug, Clone, PartialEq, Eq)]

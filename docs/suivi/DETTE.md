@@ -27,13 +27,6 @@ Une entrée par point, la plus récente en haut.
 - **Pourquoi** : la ligne est un élément d'affichage, et l'affichage de la vue détail appartient à `03-affichage-et-navigation.md`. Ajouter des `totalCount` maintenant serait modifier la requête de la spec 01 pour un besoin que personne ne consomme encore.
 - **Ce qu'il faudrait faire** : à la spec 03, ajouter `totalCount` aux trois connexions de la requête de détail, le porter dans `PrDetail` — trois champs, ou un compte par liste — et composer la ligne dans `app`. Ou décider que la ligne disparaît, et retirer la phrase de la spec 01.
 
-### La chaîne de recherche est une jointure de filtres
-
-- **Origine** : plan `2026-09-02-modele-et-donnees`, tâche 3.
-- **Ce qui est différé** : `github::search_query` joint les filtres des réglages avec une espace et n'ajoute rien. Ni `is:pr`, ni `sort:updated-desc`. La requête ramène donc aussi des issues, écartées à la traduction, et l'ordre des résultats est celui de GitHub par défaut.
-- **Pourquoi** : `is:pr` et `sort:updated-desc` sont des règles de `filter::build_query`, définies par `02-filtres.md`. Les écrire dans `github` les ferait vivre à deux endroits, et la spec 02 les déplacerait aussitôt.
-- **Ce qu'il faudrait faire** : à la spec 02, écrire `filter::Filter` et `filter::build_query`, faire porter à `Config::filters` des `Filter` plutôt que des chaînes, et remplacer l'appel à `search_query` par `filter::build_query`. `search_query` disparaît alors.
-
 ### Le texte d'une ligne de liste est composé dans le dessin
 
 - **Origine** : plan `2026-09-02-fondations`, tâche 5 — relevé par la revue finale de la branche.

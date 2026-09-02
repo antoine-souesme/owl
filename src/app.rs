@@ -8,6 +8,7 @@
 use chrono::{DateTime, Local};
 
 use crate::config::Config;
+use crate::filter::{self, Filter};
 use crate::github::GithubError;
 use crate::model::{ListPage, PrSummary};
 
@@ -51,7 +52,8 @@ const ATTENTE_INITIALE: &str = "Chargement…";
 pub enum Command {
     Fetch {
         generation: Generation,
-        filters: Vec<String>,
+        /// Chaîne de recherche complète, assemblée par `filter::build_query`.
+        query: String,
         page_size: u16,
     },
     Quit,
@@ -71,6 +73,9 @@ pub struct App {
     #[allow(dead_code)]
     pub rate_limit: Option<crate::model::RateLimit>,
     generation: Generation,
+    /// Filtres des réglages, traduits une seule fois. Un futur changement de
+    /// filtre depuis l'écran n'aura que ce vecteur à modifier.
+    filters: Vec<Filter>,
     config: Config,
 }
 
@@ -84,6 +89,11 @@ impl App {
             last_refresh: None,
             rate_limit: None,
             generation: 0,
+            filters: config
+                .filters
+                .iter()
+                .map(|texte| Filter::parse(texte))
+                .collect(),
             config,
         }
     }
@@ -132,7 +142,7 @@ impl App {
         self.loading = true;
         Command::Fetch {
             generation: self.generation,
-            filters: self.config.filters.clone(),
+            query: filter::build_query(&self.filters),
             page_size: self.config.page_size,
         }
     }
@@ -232,7 +242,7 @@ mod tests {
             commandes,
             vec![Command::Fetch {
                 generation: 1,
-                filters: vec!["author:@me".to_string(), "is:open".to_string()],
+                query: "is:pr author:@me is:open sort:updated-desc".to_string(),
                 page_size: 50,
             }]
         );
@@ -484,9 +494,49 @@ mod tests {
             app.start(),
             vec![Command::Fetch {
                 generation: 1,
-                filters: vec!["review-requested:@me".to_string()],
+                query: "is:pr review-requested:@me sort:updated-desc".to_string(),
                 page_size: 7,
             }]
         );
+    }
+
+    #[test]
+    fn un_filtre_inconnu_des_reglages_traverse_la_requete_intact() {
+        let reglages = Config {
+            filters: vec!["involves:@me -is:draft".to_string()],
+            ..Config::default()
+        };
+        let mut app = App::new(reglages);
+        match &app.start()[0] {
+            Command::Fetch { query, .. } => {
+                assert_eq!(query, "is:pr involves:@me -is:draft sort:updated-desc")
+            }
+            autre => panic!("commande inattendue : {autre:?}"),
+        }
+    }
+
+    #[test]
+    fn l_ordre_des_filtres_des_reglages_ne_change_pas_les_termes_ramenes() {
+        let requete = |filtres: Vec<&str>| {
+            let reglages = Config {
+                filters: filtres.into_iter().map(str::to_string).collect(),
+                ..Config::default()
+            };
+            match &App::new(reglages).start()[0] {
+                Command::Fetch { query, .. } => query.clone(),
+                autre => panic!("commande inattendue : {autre:?}"),
+            }
+        };
+
+        let un = requete(vec!["author:@me", "is:open"]);
+        let autre = requete(vec!["is:open", "author:@me"]);
+        assert!(un.starts_with("is:pr "), "{un}");
+        assert!(un.ends_with(" sort:updated-desc"), "{un}");
+
+        let mut mots_un: Vec<&str> = un.split(' ').collect();
+        let mut mots_autre: Vec<&str> = autre.split(' ').collect();
+        mots_un.sort_unstable();
+        mots_autre.sort_unstable();
+        assert_eq!(mots_un, mots_autre);
     }
 }

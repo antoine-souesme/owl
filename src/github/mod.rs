@@ -177,10 +177,10 @@ impl Client {
     /// appartient à `05-erreurs-et-tests.md`.
     pub async fn fetch_pull_requests(
         &self,
-        filters: &[String],
+        query: &str,
         page_size: u16,
     ) -> Result<ListPage, GithubError> {
-        let variables = json!({ "q": search_query(filters), "n": page_size });
+        let variables = json!({ "q": query, "n": page_size });
         let donnees: dto::ListData = self.execute(queries::LIST, variables).await?;
         Ok(donnees.to_list_page())
     }
@@ -245,16 +245,6 @@ fn retry_after(entetes: &HeaderMap) -> Option<i64> {
     brut.trim().parse().ok()
 }
 
-/// Assemble la chaîne de recherche.
-///
-/// Bouchon jusqu'à `docs/specs/02-filtres.md` : les filtres sont déjà écrits
-/// dans la syntaxe de GitHub, il suffit de les joindre. `filter::build_query`
-/// prendra sa place et ajoutera `is:pr` et `sort:updated-desc`. Rien n'est
-/// ajouté ici, pour ne pas dupliquer une règle qui appartient à la spec 02.
-fn search_query(filters: &[String]) -> String {
-    filters.join(" ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,7 +293,7 @@ mod tests {
         let point = serveur(statut, entetes, corps).await;
         let client = Client::with_endpoint("jeton-de-test", &point).expect("client construit");
         client
-            .fetch_pull_requests(&["author:@me".to_string()], 50)
+            .fetch_pull_requests("is:pr author:@me sort:updated-desc", 50)
             .await
     }
 
@@ -446,14 +436,6 @@ mod tests {
         let corps = r#"{"data":{"search":{"nodes":[]}}}"#;
         let page = appel("200 OK", &[], corps).await.expect("succès attendu");
         assert!(page.rate_limit.is_none());
-    }
-
-    #[test]
-    fn la_chaine_de_recherche_joint_les_filtres() {
-        assert_eq!(
-            search_query(&["author:@me".to_string(), "is:open".to_string()]),
-            "author:@me is:open"
-        );
     }
 
     #[tokio::test]
