@@ -7,10 +7,7 @@
 
 mod render;
 
-// `Glyph` n'est pas encore consommé hors de `app` : `ui/list.rs` accède à ses
-// champs sans nommer le type. La tâche 3 l'utilisera pour `DetailLine`.
-#[allow(unused_imports)]
-pub use render::{Glyph, ListRender, ListRow, Tone};
+pub use render::{ListRender, ListRow, Tone};
 
 use chrono::{DateTime, Local};
 
