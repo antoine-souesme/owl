@@ -366,7 +366,7 @@ git commit -m "Ajoute le squelette du projet et la résolution du jeton"
   - `config::default_path() -> Result<PathBuf, ConfigError>` — `~/.config/owl/config.toml`.
   - `config::load() -> Result<Config, ConfigError>` — chemin par défaut, fichier absent = valeurs par défaut.
   - `config::load_from(path: &Path) -> Result<Config, ConfigError>` — cœur testable.
-  - `config::ConfigError` — `enum` `thiserror` : `Syntax { path: String }`, `InvalidKey { path: String, key: String }`, `EmptyFilters`, `NoHomeDirectory`.
+  - `config::ConfigError` — `enum` `thiserror` : `Syntax { path: String }`, `Unreadable { path: String }`, `InvalidKey { path: String, key: String }`, `EmptyFilters`, `NoHomeDirectory`.
 
 - [ ] **Step 1: Écrire les tests de `config.rs` en premier**
 
@@ -502,6 +502,36 @@ page_size = 100
             chemin.display()
         );
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn fichier_illisible_refuse_avec_son_chemin() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if unsafe { libc_geteuid() } == 0 {
+            // Root ignore les permissions de lecture : le test n'aurait rien
+            // à vérifier dans ce contexte (CI lancée en root, par exemple).
+            return;
+        }
+
+        let fichier = NamedTempFile::new().unwrap();
+        std::fs::set_permissions(fichier.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let erreur = load_from(fichier.path()).unwrap_err();
+        let message = erreur.to_string();
+        std::fs::set_permissions(fichier.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(message.starts_with("Réglages invalides dans "), "{message}");
+        assert!(message.ends_with(" : fichier illisible."), "{message}");
+    }
+
+    #[cfg(unix)]
+    unsafe fn libc_geteuid() -> u32 {
+        extern "C" {
+            fn geteuid() -> u32;
+        }
+        geteuid()
+    }
 }
 ```
 
@@ -561,6 +591,8 @@ impl Default for Config {
 pub enum ConfigError {
     #[error("Réglages invalides dans {path} : syntaxe TOML invalide.")]
     Syntax { path: String },
+    #[error("Réglages invalides dans {path} : fichier illisible.")]
+    Unreadable { path: String },
     #[error("Réglages invalides dans {path} : {key}.")]
     InvalidKey { path: String, key: String },
     #[error("Aucun filtre actif : la recherche ramènerait tout GitHub.")]
@@ -584,14 +616,23 @@ pub fn load() -> Result<Config, ConfigError> {
     load_from(&default_path()?)
 }
 
-/// Lit les réglages à un chemin donné. Fichier absent ou illisible en lecture :
-/// valeurs par défaut, parce que la spec rend le fichier optionnel.
+/// Lit les réglages à un chemin donné. Fichier absent : valeurs par défaut,
+/// parce que la spec rend le fichier optionnel. Fichier présent mais illisible
+/// (droits insuffisants, par exemple) : erreur, car c'est une vraie
+/// mauvaise configuration à signaler, pas une absence.
 pub fn load_from(path: &Path) -> Result<Config, ConfigError> {
-    let Ok(texte) = std::fs::read_to_string(path) else {
-        return Ok(Config::default());
+    let affichage = path.display().to_string();
+
+    let texte = match std::fs::read_to_string(path) {
+        Ok(texte) => texte,
+        Err(erreur) if erreur.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Config::default());
+        }
+        Err(_) => {
+            return Err(ConfigError::Unreadable { path: affichage });
+        }
     };
 
-    let affichage = path.display().to_string();
     let table: toml::Table = toml::from_str(&texte).map_err(|_| ConfigError::Syntax {
         path: affichage.clone(),
     })?;
@@ -651,7 +692,7 @@ pub fn load_from(path: &Path) -> Result<Config, ConfigError> {
 - [ ] **Step 4: Lancer les tests pour vérifier qu'ils passent**
 
 Run: `cargo test --lib config`
-Expected: 12 tests réussis.
+Expected: 13 tests réussis.
 
 Si `toml::Table` n'existe pas sous ce nom, utiliser `toml::value::Table` — c'est le même type réexporté.
 
