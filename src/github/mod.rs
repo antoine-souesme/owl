@@ -3,7 +3,7 @@
 pub mod dto;
 pub mod queries;
 
-use crate::model::PullRequest;
+use crate::model::{ListPage, PrSummary};
 
 /// Ramène les pull requests correspondant aux filtres.
 ///
@@ -16,6 +16,9 @@ pub async fn fetch_pull_requests(
     _token: &str,
     _filters: &[String],
     _page_size: u16,
-) -> Result<Vec<PullRequest>, String> {
-    Ok(Vec::new())
+) -> Result<ListPage, String> {
+    Ok(ListPage {
+        pull_requests: Vec::<PrSummary>::new(),
+        rate_limit: None,
+    })
 }
