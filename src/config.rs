@@ -8,12 +8,9 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Méthode de fusion présélectionnée quand le dépôt en autorise plusieurs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MergeMethod {
-    Squash,
-    Rebase,
-    Merge,
-}
+/// Le type appartient au modèle : `github` en a besoin pour la mutation, et
+/// n'a pas le droit de dépendre des réglages.
+pub use crate::model::MergeMethod;
 
 /// Réglages effectifs du programme.
 #[derive(Debug, Clone, PartialEq)]
