@@ -12,8 +12,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::model::{
-    ChecksState, ListPage, MergeableState, PrKey, PrSummary, RateLimit, RepoMergeRules,
-    ReviewState, AUTEUR_INCONNU,
+    ChangedFile, CheckRun, ChecksState, Comment, ListPage, MergeableState, PrDetail, PrKey,
+    PrSummary, RateLimit, RepoMergeRules, Review, ReviewState, AUTEUR_INCONNU,
 };
 
 /// Contenu du champ `data` de la requête de liste.
@@ -90,14 +90,95 @@ pub struct ContextConnection {
     pub nodes: Vec<Option<ContextNode>>,
 }
 
+/// Un contexte de vérification arrive sous deux formes, `CheckRun` (GitHub
+/// Actions et équivalents) et `StatusContext` (anciens statuts d'API). Les
+/// champs des deux fragments cohabitent ici, et `to_check_run` tranche.
 #[derive(Debug, Deserialize)]
-pub struct ContextNode {}
+#[serde(rename_all = "camelCase")]
+pub struct ContextNode {
+    // Forme `CheckRun`.
+    pub name: Option<String>,
+    pub conclusion: Option<String>,
+    pub status: Option<String>,
+    pub details_url: Option<String>,
+    // Forme `StatusContext`.
+    pub context: Option<String>,
+    pub state: Option<String>,
+    pub target_url: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitDto {
     pub remaining: u32,
     pub reset_at: DateTime<Utc>,
+}
+
+/// Contenu du champ `data` de la requête de détail.
+#[derive(Debug, Deserialize)]
+pub struct DetailData {
+    pub repository: Option<RepositoryDetail>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryDetail {
+    pub pull_request: Option<PullRequestDetail>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestDetail {
+    pub id: String,
+    pub body: Option<String>,
+    pub head_ref_name: String,
+    pub base_ref_name: String,
+    pub additions: u32,
+    pub deletions: u32,
+    pub commits: Option<CommitConnection>,
+    pub reviews: Option<ReviewConnection>,
+    pub comments: Option<CommentConnection>,
+    pub files: Option<FileConnection>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewConnection {
+    pub nodes: Vec<Option<ReviewNode>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewNode {
+    pub author: Option<Actor>,
+    pub state: Option<String>,
+    pub body: Option<String>,
+    /// Absent pour une relecture en attente, jamais soumise.
+    pub submitted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CommentConnection {
+    pub nodes: Vec<Option<CommentNode>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentNode {
+    pub author: Option<Actor>,
+    pub body: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileConnection {
+    pub nodes: Vec<Option<FileNode>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileNode {
+    pub path: String,
+    pub additions: u32,
+    pub deletions: u32,
 }
 
 impl ListData {
@@ -194,6 +275,155 @@ fn mergeable_from(value: Option<&str>) -> MergeableState {
         Some("MERGEABLE") => MergeableState::Mergeable,
         Some("CONFLICTING") => MergeableState::Conflicting,
         _ => MergeableState::Unknown,
+    }
+}
+
+impl PullRequestDetail {
+    /// Assemble la vue détail autour du résumé déjà connu : la requête de
+    /// détail ne renvoie aucun des champs de la liste.
+    pub fn to_detail(&self, summary: PrSummary) -> PrDetail {
+        let contextes = self
+            .commits
+            .as_ref()
+            .and_then(|connexion| connexion.nodes.first())
+            .and_then(|noeud| noeud.commit.status_check_rollup.as_ref())
+            .and_then(|rollup| rollup.contexts.as_ref());
+
+        PrDetail {
+            summary,
+            node_id: self.id.clone(),
+            body: self.body.clone().unwrap_or_default(),
+            head_ref: self.head_ref_name.clone(),
+            base_ref: self.base_ref_name.clone(),
+            checks: contextes
+                .map(|connexion| {
+                    connexion
+                        .nodes
+                        .iter()
+                        .flatten()
+                        .filter_map(ContextNode::to_check_run)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            reviews: self
+                .reviews
+                .as_ref()
+                .map(|connexion| {
+                    connexion
+                        .nodes
+                        .iter()
+                        .flatten()
+                        .filter_map(ReviewNode::to_review)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            comments: self
+                .comments
+                .as_ref()
+                .map(|connexion| {
+                    connexion
+                        .nodes
+                        .iter()
+                        .flatten()
+                        .filter_map(CommentNode::to_comment)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            files: self
+                .files
+                .as_ref()
+                .map(|connexion| {
+                    connexion
+                        .nodes
+                        .iter()
+                        .flatten()
+                        .map(|fichier| ChangedFile {
+                            path: fichier.path.clone(),
+                            additions: fichier.additions,
+                            deletions: fichier.deletions,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            additions: self.additions,
+            deletions: self.deletions,
+        }
+    }
+}
+
+impl ContextNode {
+    /// Les deux formes donnent la même entrée du modèle. Un nœud d'aucune des
+    /// deux — GitHub peut ajouter un type à l'union — est ignoré.
+    pub fn to_check_run(&self) -> Option<CheckRun> {
+        if let Some(name) = &self.name {
+            return Some(CheckRun {
+                name: name.clone(),
+                state: checks_from_check_run(self.status.as_deref(), self.conclusion.as_deref()),
+                url: self.details_url.clone(),
+            });
+        }
+        let context = self.context.as_ref()?;
+        Some(CheckRun {
+            name: context.clone(),
+            state: checks_from_rollup(self.state.as_deref()),
+            url: self.target_url.clone(),
+        })
+    }
+}
+
+impl ReviewNode {
+    /// `None` pour une relecture en attente : elle n'a pas été soumise, donc
+    /// elle n'a rien à dire à l'écran.
+    pub fn to_review(&self) -> Option<Review> {
+        Some(Review {
+            author: login_ou_inconnu(self.author.as_ref()),
+            state: review_from_review_state(self.state.as_deref()),
+            body: self.body.clone().unwrap_or_default(),
+            submitted_at: self.submitted_at?,
+        })
+    }
+}
+
+impl CommentNode {
+    pub fn to_comment(&self) -> Option<Comment> {
+        Some(Comment {
+            author: login_ou_inconnu(self.author.as_ref()),
+            body: self.body.clone().unwrap_or_default(),
+            created_at: self.created_at?,
+        })
+    }
+}
+
+/// Auteur d'une relecture ou d'un commentaire, « inconnu » si le compte a été
+/// supprimé.
+fn login_ou_inconnu(auteur: Option<&Actor>) -> String {
+    auteur
+        .map(|auteur| auteur.login.clone())
+        .unwrap_or_else(|| AUTEUR_INCONNU.to_string())
+}
+
+/// Un `CheckRun` en cours n'a pas encore de conclusion : son état vient de
+/// `status`. Terminé, il vient de `conclusion`. Une conclusion neutre ou
+/// sautée ne dit rien de la santé du code, donc `None` plutôt qu'un verdict.
+fn checks_from_check_run(status: Option<&str>, conclusion: Option<&str>) -> ChecksState {
+    if status != Some("COMPLETED") {
+        return ChecksState::Pending;
+    }
+    match conclusion {
+        Some("SUCCESS") => ChecksState::Success,
+        Some("NEUTRAL") | Some("SKIPPED") => ChecksState::None,
+        Some(_) => ChecksState::Failure,
+        None => ChecksState::None,
+    }
+}
+
+/// État d'une relecture individuelle. `COMMENTED`, `DISMISSED` et `PENDING`
+/// n'ont pas d'équivalent : ils ne demandent ni ne donnent d'accord.
+fn review_from_review_state(state: Option<&str>) -> ReviewState {
+    match state {
+        Some("APPROVED") => ReviewState::Approved,
+        Some("CHANGES_REQUESTED") => ReviewState::ChangesRequested,
+        _ => ReviewState::None,
     }
 }
 
@@ -329,5 +559,127 @@ mod tests {
         let limite = page().rate_limit.expect("le solde est présent");
         assert_eq!(limite.remaining, 4987);
         assert_eq!(limite.reset_at.to_rfc3339(), "2026-08-30T10:00:00+00:00");
+    }
+
+    use crate::model::{ChangedFile, CheckRun, PrDetail};
+
+    #[derive(Deserialize)]
+    struct EnveloppeDetail {
+        data: DetailData,
+    }
+
+    const DETAIL: &str = include_str!("../../tests/fixtures/detail.json");
+
+    /// Résumé quelconque : la requête de détail n'en renvoie aucun champ, le
+    /// détail est assemblé autour de celui que la liste a déjà donné.
+    fn resume() -> crate::model::PrSummary {
+        page().pull_requests[0].clone()
+    }
+
+    fn detail() -> PrDetail {
+        serde_json::from_str::<EnveloppeDetail>(DETAIL)
+            .expect("la réponse enregistrée doit se lire")
+            .data
+            .repository
+            .expect("dépôt présent")
+            .pull_request
+            .expect("pull request présente")
+            .to_detail(resume())
+    }
+
+    #[test]
+    fn le_detail_reprend_les_champs_de_la_pull_request() {
+        let detail = detail();
+        assert_eq!(detail.node_id, "PR_kwDOABCD12345");
+        assert_eq!(
+            detail.body,
+            "Ajoute la fenêtre de fusion et ses raccourcis."
+        );
+        assert_eq!(detail.head_ref, "feat/fusion");
+        assert_eq!(detail.base_ref, "develop");
+        assert_eq!(detail.additions, 214);
+        assert_eq!(detail.deletions, 37);
+        assert_eq!(detail.summary, resume());
+    }
+
+    #[test]
+    fn les_deux_formes_de_verification_donnent_des_entrees_equivalentes() {
+        assert_eq!(
+            detail().checks,
+            vec![
+                CheckRun {
+                    name: "build".to_string(),
+                    state: ChecksState::Success,
+                    url: Some("https://github.com/moi/owl/actions/runs/1".to_string()),
+                },
+                CheckRun {
+                    name: "clippy".to_string(),
+                    state: ChecksState::Pending,
+                    url: Some("https://github.com/moi/owl/actions/runs/2".to_string()),
+                },
+                CheckRun {
+                    name: "documentation".to_string(),
+                    state: ChecksState::None,
+                    url: None,
+                },
+                CheckRun {
+                    name: "ci/ancien-service".to_string(),
+                    state: ChecksState::Failure,
+                    url: Some("https://ancien.example/build/9".to_string()),
+                },
+                CheckRun {
+                    name: "ci/attente".to_string(),
+                    state: ChecksState::Pending,
+                    url: None,
+                },
+            ],
+            "un nœud d'aucune des deux formes est ignoré"
+        );
+    }
+
+    #[test]
+    fn les_relectures_sont_traduites_et_celles_en_attente_ignorees() {
+        let detail = detail();
+        assert_eq!(
+            detail.reviews.len(),
+            2,
+            "la relecture en attente est ignorée"
+        );
+        assert_eq!(detail.reviews[0].author, "camille");
+        assert_eq!(detail.reviews[0].state, ReviewState::Approved);
+        assert_eq!(detail.reviews[0].body, "Bon pour moi.");
+        assert_eq!(
+            detail.reviews[0].submitted_at.to_rfc3339(),
+            "2026-08-30T08:00:00+00:00"
+        );
+        assert_eq!(detail.reviews[1].author, "inconnu");
+        assert_eq!(detail.reviews[1].state, ReviewState::ChangesRequested);
+    }
+
+    #[test]
+    fn les_commentaires_et_les_fichiers_sont_traduits() {
+        let detail = detail();
+        assert_eq!(detail.comments.len(), 1);
+        assert_eq!(detail.comments[0].author, "moi");
+        assert_eq!(detail.comments[0].body, "Je rebase et je fusionne.");
+        assert_eq!(
+            detail.comments[0].created_at.to_rfc3339(),
+            "2026-08-30T08:15:00+00:00"
+        );
+        assert_eq!(
+            detail.files,
+            vec![
+                ChangedFile {
+                    path: "src/ui/merge.rs".to_string(),
+                    additions: 180,
+                    deletions: 2,
+                },
+                ChangedFile {
+                    path: "src/app.rs".to_string(),
+                    additions: 34,
+                    deletions: 35,
+                },
+            ]
+        );
     }
 }

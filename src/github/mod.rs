@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
 
-use crate::model::ListPage;
+use crate::model::{ListPage, PrDetail, PrSummary};
 
 const ENDPOINT: &str = "https://api.github.com/graphql";
 
@@ -167,6 +167,25 @@ impl Client {
         let variables = json!({ "q": search_query(filters), "n": page_size });
         let donnees: dto::ListData = self.execute(queries::LIST, variables).await?;
         Ok(donnees.to_list_page())
+    }
+
+    /// Détail d'une seule pull request, lancé à l'ouverture de la vue détail.
+    ///
+    /// Le résumé déjà affiché est repris tel quel : la requête de détail ne
+    /// renvoie aucun de ses champs. Elle apporte en revanche l'identifiant
+    /// GraphQL, nécessaire à la fusion.
+    pub async fn fetch_detail(&self, summary: &PrSummary) -> Result<PrDetail, GithubError> {
+        let variables = json!({
+            "owner": summary.key.owner(),
+            "name": summary.key.name(),
+            "number": summary.key.number,
+        });
+        let donnees: dto::DetailData = self.execute(queries::DETAIL, variables).await?;
+        donnees
+            .repository
+            .and_then(|depot| depot.pull_request)
+            .map(|pr| pr.to_detail(summary.clone()))
+            .ok_or(GithubError::NotFound)
     }
 }
 
@@ -329,5 +348,68 @@ mod tests {
             search_query(&["author:@me".to_string(), "is:open".to_string()]),
             "author:@me is:open"
         );
+    }
+
+    #[tokio::test]
+    async fn le_client_ramene_le_detail_d_une_pull_request() {
+        const DETAIL: &str = include_str!("../../tests/fixtures/detail.json");
+        let point = serveur("200 OK", &[], DETAIL).await;
+        let client = Client::with_endpoint("jeton-de-test", &point).expect("client construit");
+        let resume = crate::model::PrSummary {
+            key: crate::model::PrKey {
+                repo: "moi/owl".to_string(),
+                number: 42,
+            },
+            title: "Ajoute la fenêtre de fusion".to_string(),
+            author: "moi".to_string(),
+            url: "https://github.com/moi/owl/pull/42".to_string(),
+            is_draft: false,
+            checks: crate::model::ChecksState::Success,
+            review: crate::model::ReviewState::Approved,
+            mergeable: crate::model::MergeableState::Mergeable,
+            updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
+            repo_rules: crate::model::RepoMergeRules {
+                squash: true,
+                merge: false,
+                rebase: true,
+                delete_branch_on_merge: true,
+            },
+        };
+
+        let detail = client.fetch_detail(&resume).await.expect("succès attendu");
+        assert_eq!(detail.node_id, "PR_kwDOABCD12345");
+        assert_eq!(detail.checks.len(), 5);
+        assert_eq!(detail.summary, resume);
+    }
+
+    #[tokio::test]
+    async fn une_pull_request_absente_de_la_reponse_est_introuvable() {
+        let point = serveur("200 OK", &[], r#"{"data":{"repository":null}}"#).await;
+        let client = Client::with_endpoint("jeton-de-test", &point).expect("client construit");
+        let resume = crate::model::PrSummary {
+            key: crate::model::PrKey {
+                repo: "moi/owl".to_string(),
+                number: 1,
+            },
+            title: String::new(),
+            author: "moi".to_string(),
+            url: String::new(),
+            is_draft: false,
+            checks: crate::model::ChecksState::None,
+            review: crate::model::ReviewState::None,
+            mergeable: crate::model::MergeableState::Unknown,
+            updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
+            repo_rules: crate::model::RepoMergeRules {
+                squash: true,
+                merge: true,
+                rebase: true,
+                delete_branch_on_merge: false,
+            },
+        };
+        let erreur = client
+            .fetch_detail(&resume)
+            .await
+            .expect_err("erreur attendue");
+        assert!(matches!(erreur, GithubError::NotFound));
     }
 }

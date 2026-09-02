@@ -182,6 +182,26 @@ derniers commentaires, les cent premiers fichiers. Il n'y a pas de pagination da
 vue détail. Quand une liste est tronquée, l'écran l'indique par une ligne
 « … et N de plus ».
 
+Les états qui n'existent que dans la vue détail sont traduits ainsi :
+
+| Situation | Traduction |
+|---|---|
+| `CheckRun` dont `status` n'est pas `COMPLETED` | `Pending` — la conclusion n'existe pas encore |
+| `CheckRun` de conclusion `SUCCESS` | `Success` |
+| `CheckRun` de conclusion `NEUTRAL` ou `SKIPPED` | `None` — aucun verdict sur le code |
+| `CheckRun` de toute autre conclusion | `Failure` |
+| `StatusContext` | table du `statusCheckRollup`, sur son champ `state` |
+| Nœud d'aucune des deux formes | ignoré |
+| Relecture d'état `APPROVED` / `CHANGES_REQUESTED` | `Approved` / `ChangesRequested` |
+| Relecture d'un autre état (`COMMENTED`, `DISMISSED`, `PENDING`) | `None` |
+| Relecture sans `submittedAt` (en attente, jamais soumise) | ignorée |
+
+La ligne « … et N de plus » n'est pas réalisable avec cette requête : elle ne
+demande aucun `totalCount`, et une liste bornée à vingt éléments qui en renvoie
+vingt est indiscernable d'une liste complète de vingt. La spec 03, qui possède cet
+affichage, tranchera entre ajouter les `totalCount` à la requête et abandonner la
+ligne.
+
 ## Mutation de fusion
 
 ```graphql

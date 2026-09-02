@@ -1,0 +1,94 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "id": "PR_kwDOABCD12345",
+        "body": "Ajoute la fenêtre de fusion et ses raccourcis.",
+        "headRefName": "feat/fusion",
+        "baseRefName": "develop",
+        "additions": 214,
+        "deletions": 37,
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "contexts": {
+                    "nodes": [
+                      {
+                        "name": "build",
+                        "conclusion": "SUCCESS",
+                        "status": "COMPLETED",
+                        "detailsUrl": "https://github.com/moi/owl/actions/runs/1"
+                      },
+                      {
+                        "name": "clippy",
+                        "conclusion": null,
+                        "status": "IN_PROGRESS",
+                        "detailsUrl": "https://github.com/moi/owl/actions/runs/2"
+                      },
+                      {
+                        "name": "documentation",
+                        "conclusion": "SKIPPED",
+                        "status": "COMPLETED",
+                        "detailsUrl": null
+                      },
+                      {
+                        "context": "ci/ancien-service",
+                        "state": "FAILURE",
+                        "targetUrl": "https://ancien.example/build/9"
+                      },
+                      {
+                        "context": "ci/attente",
+                        "state": "EXPECTED",
+                        "targetUrl": null
+                      },
+                      {}
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "reviews": {
+          "nodes": [
+            {
+              "author": { "login": "camille" },
+              "state": "APPROVED",
+              "body": "Bon pour moi.",
+              "submittedAt": "2026-08-30T08:00:00Z"
+            },
+            {
+              "author": null,
+              "state": "CHANGES_REQUESTED",
+              "body": "Il manque un test.",
+              "submittedAt": "2026-08-29T15:30:00Z"
+            },
+            {
+              "author": { "login": "moi" },
+              "state": "PENDING",
+              "body": "",
+              "submittedAt": null
+            }
+          ]
+        },
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "moi" },
+              "body": "Je rebase et je fusionne.",
+              "createdAt": "2026-08-30T08:15:00Z"
+            }
+          ]
+        },
+        "files": {
+          "nodes": [
+            { "path": "src/ui/merge.rs", "additions": 180, "deletions": 2 },
+            { "path": "src/app.rs", "additions": 34, "deletions": 35 }
+          ]
+        }
+      }
+    }
+  }
+}
