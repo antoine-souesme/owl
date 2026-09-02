@@ -5,6 +5,13 @@
 //! Toutes les décisions d'affichage — quel message, quel nombre — sont prises
 //! ici, jamais dans `ui`.
 
+mod render;
+
+// `Glyph` n'est pas encore consommé hors de `app` : `ui/list.rs` accède à ses
+// champs sans nommer le type. La tâche 3 l'utilisera pour `DetailLine`.
+#[allow(unused_imports)]
+pub use render::{Glyph, ListRender, ListRow, Tone};
+
 use chrono::{DateTime, Local};
 
 use crate::config::Config;
@@ -278,14 +285,14 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use crate::model::{
         ChecksState, ListPage, MergeableState, PrKey, PrSummary, RepoMergeRules, ReviewState,
     };
 
-    fn pr(numero: u32) -> PrSummary {
+    pub(crate) fn pr(numero: u32) -> PrSummary {
         PrSummary {
             key: PrKey {
                 repo: "moi/depot".to_string(),
@@ -310,7 +317,7 @@ mod tests {
 
     /// Réponse de liste sans solde d'appels, suffisante partout où seul le
     /// contenu de la liste compte.
-    fn page(pull_requests: Vec<PrSummary>) -> ListPage {
+    pub(crate) fn page(pull_requests: Vec<PrSummary>) -> ListPage {
         ListPage {
             pull_requests,
             rate_limit: None,
@@ -318,7 +325,7 @@ mod tests {
     }
 
     /// Application démarrée, première requête émise, génération courante rendue.
-    fn app_demarree() -> (App, Generation) {
+    pub(crate) fn app_demarree() -> (App, Generation) {
         let mut app = App::new(Config::default());
         let commandes = app.start();
         let generation = match &commandes[0] {
@@ -329,7 +336,7 @@ mod tests {
     }
 
     /// PR d'un dépôt donné, pour distinguer deux clés dans un même test.
-    fn pr_de(depot: &str, numero: u32) -> PrSummary {
+    pub(crate) fn pr_de(depot: &str, numero: u32) -> PrSummary {
         PrSummary {
             key: PrKey {
                 repo: depot.to_string(),
@@ -340,7 +347,7 @@ mod tests {
     }
 
     /// Application démarrée et garnie de la liste donnée.
-    fn app_garnie(liste: Vec<PrSummary>) -> App {
+    pub(crate) fn app_garnie(liste: Vec<PrSummary>) -> App {
         let (mut app, generation) = app_demarree();
         app.handle(Event::ListLoaded {
             generation,
@@ -350,7 +357,7 @@ mod tests {
     }
 
     /// Rafraîchit et livre la nouvelle liste, en respectant la génération.
-    fn rafraichir(app: &mut App, liste: Vec<PrSummary>) {
+    pub(crate) fn rafraichir(app: &mut App, liste: Vec<PrSummary>) {
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::FetchList { generation, .. } => *generation,
             autre => panic!("commande inattendue : {autre:?}"),
