@@ -204,6 +204,13 @@ traitement des erreurs :
 - limite d'appels atteinte, reconnue à la réponse 403 accompagnée d'un en-tête de
   réinitialisation, ou à un `rateLimit.remaining` nul.
 
+## Note d'implémentation
+
+Les fondations laissent un bouchon : `github::fetch_pull_requests` renvoie une
+liste vide sans toucher au réseau, et son erreur est un simple `String`. Cette
+spec remplace le corps de la fonction et substitue au `String` un type d'erreur
+`thiserror`. Le type `app::Event::Data` change en conséquence.
+
 ## Critères de réussite
 
 - Une réponse de liste enregistrée sur disque se traduit en `Vec<PrSummary>` exact,

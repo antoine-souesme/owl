@@ -110,6 +110,13 @@ Pas de fusion de plusieurs PR d'un coup, pas de fusion automatique en attente de
 vérifications, pas de modification du titre ou du message de commit de fusion. Une
 fusion, une confirmation.
 
+## Note d'implémentation
+
+Les fondations lisent et valident `preferred_merge_method` dans les réglages, mais
+ne s'en servent pas encore : le champ de `config::Config` est renseigné et laissé
+de côté. Cette spec est celle qui lui donne son usage. `ui/merge.rs` est vide
+jusque-là.
+
 ## Critères de réussite
 
 - Un dépôt n'autorisant que l'écrasement ne propose jamais le rebasage ni le commit

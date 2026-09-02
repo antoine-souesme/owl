@@ -21,8 +21,17 @@ dans la barre d'état, et le prochain rafraîchissement retente.
 | `gh` présent mais non connecté | « Non connecté à GitHub. Lance `gh auth login`. » |
 | Jeton refusé (HTTP 401) | « Jeton refusé par GitHub. Lance `gh auth login` pour le renouveler. » |
 | Droits insuffisants (HTTP 403 sans limite d'appels) | « Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`. » |
-| Fichier de réglages illisible ou invalide | « Réglages invalides dans <chemin> : <clé fautive>. » |
+| Valeur de réglage invalide | « Réglages invalides dans <chemin> : <clé fautive>. » |
+| Fichier de réglages mal formé | « Réglages invalides dans <chemin> : syntaxe TOML invalide. » |
+| Fichier de réglages présent mais illisible | « Réglages invalides dans <chemin> : fichier illisible. » |
 | Liste de filtres vide | « Aucun filtre actif : la recherche ramènerait tout GitHub. » |
+| Dossier personnel introuvable | « Impossible de déterminer le dossier de configuration. » |
+
+Les trois cas de réglages sont distincts parce qu'ils n'apprennent pas la même
+chose : une valeur refusée peut nommer sa clé, un fichier syntaxiquement faux n'a
+aucune clé à nommer, et un fichier présent mais illisible — droits insuffisants,
+par exemple — n'est pas un fichier absent. Un fichier absent, lui, n'est pas une
+erreur : les valeurs par défaut s'appliquent.
 
 Ces messages sont écrits avant toute prise de contrôle du terminal, donc jamais
 avalés par l'écran alterné.

@@ -91,6 +91,13 @@ Il n'y a pas de changement de filtre depuis l'écran, ni de touche pour basculer
 ouverte : la structure `Filter` et `build_query` suffiront à l'ajouter plus tard, en
 ne touchant que `app` et `ui`.
 
+## Note d'implémentation
+
+Les fondations laissent `filter.rs` vide : les filtres circulent sous forme de
+chaînes, telles qu'écrites dans le fichier de réglages, et `config::Config`
+expose `filters: Vec<String>`. Cette spec introduit `Filter` et `build_query`,
+et c'est `app` qui traduit les chaînes des réglages en variantes de `Filter`.
+
 ## Critères de réussite
 
 - Une liste de filtres donnée produit exactement la chaîne attendue, `is:pr` en tête
