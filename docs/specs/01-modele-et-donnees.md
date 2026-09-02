@@ -94,6 +94,15 @@ besoin sans appel supplémentaire.
 renvoie `UNKNOWN` le temps du calcul ; `owl` traite `UNKNOWN` comme « on ne sait pas
 encore » et non comme un blocage.
 
+Les cas que l'API laisse ouverts sont tranchés ainsi :
+
+| Situation | Traduction |
+|---|---|
+| `author` à `null` (compte supprimé) | auteur affiché « inconnu » |
+| Aucun commit, ou `statusCheckRollup` absent | `ChecksState::None` |
+| Valeur d'état inconnue de la table | traitée comme une absence : `None`, ou `Unknown` pour `mergeable` |
+| Nœud sans les champs d'une pull request | ignoré, sans erreur |
+
 ## Requête de liste
 
 Une seule requête, du type `search`, portant la chaîne construite par le module
