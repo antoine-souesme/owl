@@ -56,8 +56,8 @@ réinitialisation, et la barre d'état l'annonce : « limite d'appels atteinte,
 reprise à 14 h 32 ». La touche `r` est refusée pendant cette suspension, avec le même
 message. `owl` ne réessaie jamais en boucle une requête refusée pour cause de limite.
 
-Quand GitHub refuse sans donner d'heure de reprise — le cas des limites
-secondaires sans en-tête `retry-after` —, `owl` attend une minute avant de
+Quand GitHub refuse un solde de limite primaire épuisé sans que l'en-tête
+d'heure de réinitialisation soit exploitable, `owl` attend une minute avant de
 reprendre. L'attente est arbitraire, mais l'interdiction de réessayer en
 boucle, elle, ne l'est pas.
 

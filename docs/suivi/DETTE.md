@@ -20,6 +20,15 @@ Une entrée par point, la plus récente en haut.
 
 ---
 
+### Une limite secondaire classée en refus de droits fait échouer le démarrage avec un faux diagnostic
+
+- **Origine** : plan `2026-09-02-erreurs-et-tests`, revue finale de la branche.
+- **Ce qui est différé** : une limite secondaire de GitHub (403 ou 429 sans `retry-after`, solde non nul) est classée en `GithubError::Forbidden`. Reçue à la première requête, elle fait maintenant refuser le démarrage avec le message « Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`. » — un diagnostic faux, et une régression par rapport au comportement précédent où le programme démarrait.
+- **Pourquoi** : corriger le classement demande de trancher dans `docs/specs/05-erreurs-et-tests.md` la distinction entre droits insuffisants et limite secondaire, que le tableau des erreurs de démarrage ne fait pas ; c'est une décision de spec, hors du périmètre de ce plan.
+- **Ce qu'il faudrait faire** : distinguer la limite secondaire du refus de droits dans `src/github/mod.rs` (un corps de réponse de limite secondaire porte un message reconnaissable), lui donner sa propre variante d'erreur, et décider dans la spec si elle empêche le démarrage ou non.
+
+---
+
 ### Confirmer une fusion sur une pull request disparue ne produit rien
 
 - **Origine** : plan `2026-09-02-fusion`, revue finale de la branche.

@@ -5,8 +5,8 @@
 //! barre d'état : un jeton refusé et des droits insuffisants ne se corrigent
 //! pas en attendant le prochain rafraîchissement. Tout le reste — réseau
 //! injoignable, limite d'appels, réponse illisible — laisse `owl` démarrer :
-//! la liste s'affichera vide, l'erreur en barre d'état, et le minuteur
-//! retentera.
+//! la liste s'affichera vide, et une limite d'appels suspendra tout de suite
+//! le rafraîchissement au lieu de laisser l'erreur en barre d'état.
 
 use crate::github::GithubError;
 

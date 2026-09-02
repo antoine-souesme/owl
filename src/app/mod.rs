@@ -2429,4 +2429,20 @@ pub(crate) mod tests {
         });
         assert!(app.error.is_none(), "erreur = {:?}", app.error);
     }
+
+    #[test]
+    fn un_refus_pour_limite_sur_le_detail_suspend_au_lieu_d_afficher_l_erreur() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let generation = ouvrir_detail(&mut app);
+        let reprise = chrono::Utc::now() + chrono::Duration::minutes(15);
+        app.handle(Event::DetailLoaded {
+            generation,
+            key: pr(1).key,
+            result: Err(GithubError::RateLimited {
+                reset_at: Some(reprise),
+            }),
+        });
+        assert!(app.error.is_none(), "erreur = {:?}", app.error);
+        assert!(app.handle(Event::Tick).is_empty());
+    }
 }
