@@ -15,7 +15,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
         .split(area);
 
     let lignes: Vec<ListItem> = app
-        .items
+        .prs
         .iter()
         .map(|pr| ListItem::new(format!("{}#{}  {}", pr.key.repo, pr.key.number, pr.title)))
         .collect();

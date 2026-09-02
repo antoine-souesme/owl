@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind};
+use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -157,7 +157,7 @@ fn execute_command(
 ) -> bool {
     match commande {
         Command::Quit => return true,
-        Command::Fetch {
+        Command::FetchList {
             generation,
             query,
             page_size,
@@ -166,7 +166,7 @@ fn execute_command(
             let client = client.clone();
             tokio::spawn(async move {
                 let resultat = client.fetch_pull_requests(&query, page_size).await;
-                let _ = envoi.send(Event::Data {
+                let _ = envoi.send(Event::ListLoaded {
                     generation,
                     result: resultat,
                 });
@@ -204,8 +204,16 @@ fn spawn_keyboard(envoi: UnboundedSender<Event>) {
         if touche.kind != KeyEventKind::Press {
             continue;
         }
-        let traduite = match touche.code {
-            KeyCode::Char(caractere) => Key::Char(caractere),
+        let traduite = match (touche.code, touche.modifiers) {
+            // Ctrl+C d'abord : sans ce cas, elle passerait pour un « c ».
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => Key::CtrlC,
+            (KeyCode::Char(caractere), _) => Key::Char(caractere),
+            (KeyCode::Up, _) => Key::Up,
+            (KeyCode::Down, _) => Key::Down,
+            (KeyCode::Left, _) => Key::Left,
+            (KeyCode::Right, _) => Key::Right,
+            (KeyCode::Enter, _) => Key::Enter,
+            (KeyCode::Esc, _) => Key::Esc,
             _ => Key::Other,
         };
         if envoi.send(Event::Key(traduite)).is_err() {
