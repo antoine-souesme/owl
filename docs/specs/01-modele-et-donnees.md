@@ -215,10 +215,28 @@ traitement des erreurs :
 
 ## Note d'implémentation
 
-Les fondations laissent un bouchon : `github::fetch_pull_requests` renvoie une
-liste vide sans toucher au réseau, et son erreur est un simple `String`. Cette
-spec remplace le corps de la fonction et substitue au `String` un type d'erreur
-`thiserror`. Le type `app::Event::Data` change en conséquence.
+Les fondations laissaient un bouchon : `github::fetch_pull_requests` renvoyait une
+liste vide sans toucher au réseau, et son erreur était un simple `String`. Cette
+spec le remplace par `github::Client`, dont l'erreur est le type `thiserror`
+`GithubError`. Trois conséquences :
+
+- `app::Event::Data` porte `Result<ListPage, GithubError>`. `app` connaît donc le
+  type d'erreur de `github`, ce que les règles de dépendance autorisent : elles
+  interdisent à `github` de connaître `app`, pas l'inverse, et `app` ne gagne
+  aucun appel réseau au passage.
+- Le solde d'appels voyage avec la liste, dans `ListPage { pull_requests,
+  rate_limit }`. Un `rateLimit.remaining` nul dans une réponse réussie n'est pas
+  une erreur : les données sont rendues, le solde est transmis, et la suspension
+  du rafraîchissement reste le sujet de `05-erreurs-et-tests.md`.
+  `GithubError::RateLimited` est réservé au refus de GitHub, reconnu à la réponse
+  403 accompagnée d'un en-tête de réinitialisation.
+- La chaîne de recherche est, jusqu'à `02-filtres.md`, la simple jointure des
+  filtres des réglages. `is:pr` n'est pas ajouté ici : c'est une règle de
+  `build_query`, et la dupliquer serait la faire vivre à deux endroits.
+
+La mutation de fusion est posée en constante dans `github::queries`, et n'est
+appelée par aucune fonction à ce stade : son déclenchement, comme le choix de la
+méthode, appartient à `04-fusion.md`.
 
 ## Critères de réussite
 

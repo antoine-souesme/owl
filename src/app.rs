@@ -8,6 +8,7 @@
 use chrono::{DateTime, Local};
 
 use crate::config::Config;
+use crate::github::GithubError;
 use crate::model::{ListPage, PrSummary};
 
 /// Numéro de génération d'une demande réseau. Un résultat dont la génération
@@ -35,7 +36,7 @@ pub enum Event {
     /// Résultat d'une demande réseau.
     Data {
         generation: Generation,
-        result: Result<ListPage, String>,
+        result: Result<ListPage, GithubError>,
     },
 }
 
@@ -118,7 +119,7 @@ impl App {
                         self.status = self.liste_resumee();
                     }
                     // Message de GitHub repris tel quel, et liste conservée.
-                    Err(message) => self.status = message,
+                    Err(erreur) => self.status = erreur.to_string(),
                 }
                 Vec::new()
             }
@@ -175,6 +176,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github::GithubError;
 
     use crate::model::{
         ChecksState, ListPage, MergeableState, PrKey, PrSummary, RepoMergeRules, ReviewState,
@@ -323,10 +325,10 @@ mod tests {
         };
         app.handle(Event::Data {
             generation,
-            result: Err("Réseau injoignable".to_string()),
+            result: Err(GithubError::Transport),
         });
         assert_eq!(app.items, vec![pr(1)], "la liste précédente reste visible");
-        assert_eq!(app.status, "Réseau injoignable", "message repris tel quel");
+        assert_eq!(app.status, "Réseau injoignable.", "message repris tel quel");
         assert!(!app.loading);
     }
 
@@ -335,7 +337,7 @@ mod tests {
         let (mut app, generation) = app_demarree();
         app.handle(Event::Data {
             generation,
-            result: Err("Réseau injoignable".to_string()),
+            result: Err(GithubError::Transport),
         });
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::Fetch { generation, .. } => *generation,
@@ -462,11 +464,11 @@ mod tests {
         let (mut app, generation) = app_demarree();
         app.handle(Event::Data {
             generation,
-            result: Err("Réseau injoignable".to_string()),
+            result: Err(GithubError::Transport),
         });
         assert_eq!(
             app.status_line(),
-            "Réseau injoignable · q quitter · r rafraîchir",
+            "Réseau injoignable. · q quitter · r rafraîchir",
             "aucune heure : aucun rafraîchissement n'a encore réussi"
         );
     }
