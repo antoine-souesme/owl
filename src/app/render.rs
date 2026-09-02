@@ -4,9 +4,9 @@
 //! ne touche au terminal. `ui` reçoit des chaînes prêtes et des tons, et
 //! n'ajoute que la mise en page et la couleur.
 
-use crate::app::{App, View};
+use crate::app::{App, MergeDialogState, View};
 use crate::filter::Filter;
-use crate::model::{ChecksState, MergeableState, PrDetail, PrSummary, ReviewState};
+use crate::model::{ChecksState, MergeMethod, MergeableState, PrDetail, PrSummary, ReviewState};
 
 /// Couleur logique d'un élément. `ui` la traduit en couleur de terminal ;
 /// le sens — vert pour « ça passe » — est décidé ici.
@@ -408,14 +408,99 @@ fn libelle_fusion(etat: MergeableState) -> &'static str {
     }
 }
 
+/// La fenêtre de fusion, prête à dessiner : un titre de cadre et des lignes
+/// déjà écrites, chevron de sélection compris. `ui` ne compose rien.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeRender {
+    pub title: String,
+    pub lines: Vec<String>,
+}
+
+const TITRE_FUSION: &str = " Fusionner ";
+const AIDE_CHOIX: &str = "Entrée pour confirmer · Échap pour annuler";
+const AIDE_ECHEC: &str = "Entrée pour réessayer · Échap pour fermer";
+const FUSION_EN_COURS: &str = "Fusion en cours…";
+
+/// Libellé d'une méthode dans la liste de choix.
+fn libelle(methode: MergeMethod) -> &'static str {
+    match methode {
+        MergeMethod::Squash => "Écraser les commits (squash)",
+        MergeMethod::Rebase => "Rebaser (rebase)",
+        MergeMethod::Merge => "Créer un commit de fusion (merge)",
+    }
+}
+
+/// Libellé d'une méthode au fil d'une phrase, sans capitale ni parenthèse.
+fn libelle_court(methode: MergeMethod) -> &'static str {
+    match methode {
+        MergeMethod::Squash => "écraser les commits",
+        MergeMethod::Rebase => "rebaser",
+        MergeMethod::Merge => "créer un commit de fusion",
+    }
+}
+
+impl App {
+    /// Compose la fenêtre de fusion, s'il y en a une.
+    ///
+    /// La largeur n'entre pas ici : la fenêtre s'ajuste à son contenu, et le
+    /// message d'erreur de GitHub n'est jamais tronqué.
+    pub fn merge_render(&self) -> Option<MergeRender> {
+        let fenetre = self.merge.as_ref()?;
+
+        let mut lignes = vec![
+            format!("{} #{}", fenetre.key.repo, fenetre.key.number),
+            fenetre.title.clone(),
+            String::new(),
+        ];
+
+        match &fenetre.state {
+            MergeDialogState::Choosing => {
+                // Une seule méthode autorisée : rien à choisir, on le dit.
+                if let [seule] = fenetre.methods.as_slice() {
+                    lignes.push(format!(
+                        "Méthode : {} (imposé par le dépôt)",
+                        libelle_court(*seule)
+                    ));
+                } else {
+                    lignes.push("Méthode :".to_string());
+                    for (indice, methode) in fenetre.methods.iter().enumerate() {
+                        let chevron = if indice == fenetre.selected { ">" } else { " " };
+                        lignes.push(format!("  {chevron} {}", libelle(*methode)));
+                    }
+                }
+                lignes.push(String::new());
+                lignes.push(AIDE_CHOIX.to_string());
+            }
+            MergeDialogState::Submitting => {
+                if let Some(methode) = fenetre.method() {
+                    lignes.push(format!("Méthode : {}", libelle_court(methode)));
+                }
+                lignes.push(String::new());
+                lignes.push(FUSION_EN_COURS.to_string());
+            }
+            MergeDialogState::Failed(message) => {
+                lignes.push(message.clone());
+                lignes.push(String::new());
+                lignes.push(AIDE_ECHEC.to_string());
+            }
+        }
+
+        Some(MergeRender {
+            title: TITRE_FUSION.to_string(),
+            lines: lignes,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::app::tests::detail;
-    use crate::app::tests::{app_garnie, page, pr, pr_de};
-    use crate::app::{Command, Event, Key, View};
+    use crate::app::tests::{app_garnie, page, pr, pr_avec_regles, pr_de};
+    use crate::app::{Command, Event, Key, MergeDialogState, View};
     use crate::config::Config;
+    use crate::model::RepoMergeRules;
 
     /// Largeur confortable : aucun titre n'y est tronqué.
     const LARGE: u16 = 120;
@@ -756,5 +841,91 @@ mod tests {
             }
             autre => panic!("rendu inattendu : {autre:?}"),
         }
+    }
+
+    fn tout_autorise() -> RepoMergeRules {
+        RepoMergeRules {
+            squash: true,
+            merge: true,
+            rebase: true,
+            delete_branch_on_merge: true,
+        }
+    }
+
+    #[test]
+    fn sans_fenetre_ouverte_il_n_y_a_rien_a_dessiner() {
+        let app = app_garnie(vec![pr_avec_regles(1, tout_autorise())]);
+        assert!(app.merge_render().is_none());
+    }
+
+    #[test]
+    fn la_fenetre_montre_le_depot_le_titre_et_les_methodes_autorisees() {
+        let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
+        app.handle(Event::Key(Key::Char('m')));
+        let rendu = app.merge_render().expect("la fenêtre doit être ouverte");
+
+        assert_eq!(rendu.title, " Fusionner ");
+        assert_eq!(rendu.lines[0], "moi/depot #142");
+        assert_eq!(rendu.lines[1], "Titre 142");
+        assert!(rendu.lines.contains(&"Méthode :".to_string()));
+        assert!(rendu
+            .lines
+            .contains(&"  > Écraser les commits (squash)".to_string()));
+        assert!(rendu.lines.contains(&"    Rebaser (rebase)".to_string()));
+        assert!(rendu
+            .lines
+            .contains(&"    Créer un commit de fusion (merge)".to_string()));
+        assert!(rendu
+            .lines
+            .contains(&"Entrée pour confirmer · Échap pour annuler".to_string()));
+    }
+
+    #[test]
+    fn une_seule_methode_autorisee_remplace_la_liste_par_une_ligne() {
+        let regles = RepoMergeRules {
+            squash: true,
+            merge: false,
+            rebase: false,
+            delete_branch_on_merge: true,
+        };
+        let mut app = app_garnie(vec![pr_avec_regles(142, regles)]);
+        app.handle(Event::Key(Key::Char('m')));
+        let rendu = app.merge_render().expect("la fenêtre doit être ouverte");
+
+        assert!(rendu
+            .lines
+            .contains(&"Méthode : écraser les commits (imposé par le dépôt)".to_string()));
+        assert!(!rendu.lines.iter().any(|ligne| ligne.contains('>')));
+    }
+
+    #[test]
+    fn la_fenetre_annonce_la_fusion_en_cours_sans_se_fermer() {
+        let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
+        app.handle(Event::Key(Key::Char('m')));
+        app.handle(Event::Key(Key::Enter));
+        let rendu = app.merge_render().expect("la fenêtre doit rester ouverte");
+
+        assert!(rendu.lines.contains(&"Fusion en cours…".to_string()));
+        assert!(!rendu
+            .lines
+            .iter()
+            .any(|ligne| ligne.contains("Échap pour annuler")));
+    }
+
+    #[test]
+    fn un_echec_montre_le_message_de_github_tel_quel() {
+        let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
+        app.handle(Event::Key(Key::Char('m')));
+        if let Some(fenetre) = app.merge.as_mut() {
+            fenetre.state = MergeDialogState::Failed("Base branch was modified.".to_string());
+        }
+        let rendu = app.merge_render().expect("la fenêtre doit être ouverte");
+
+        assert!(rendu
+            .lines
+            .contains(&"Base branch was modified.".to_string()));
+        assert!(rendu
+            .lines
+            .contains(&"Entrée pour réessayer · Échap pour fermer".to_string()));
     }
 }

@@ -7,7 +7,7 @@
 
 mod render;
 
-pub use render::{ListRender, ListRow, Tone};
+pub use render::{ListRender, ListRow, MergeRender, Tone};
 
 use render::tronquer;
 

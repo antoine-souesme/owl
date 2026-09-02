@@ -15,6 +15,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
         View::List => list::draw(frame, zone, app),
         View::Detail { .. } => detail::draw(frame, zone, app),
     }
+    // Par-dessus la vue courante, et après elle : la fenêtre est modale.
+    if let Some(rendu) = app.merge_render() {
+        merge::draw(frame, zone, &rendu);
+    }
 }
 
 pub(crate) fn couleur(ton: Tone) -> Color {
