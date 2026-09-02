@@ -80,6 +80,11 @@ pub enum Command {
         /// recopie dans le `PrDetail` qu'il rend.
         summary: PrSummary,
     },
+    /// Ouvre une URL dans le navigateur. `app` choisit l'URL, `main` l'ouvre :
+    /// `app` ne fait aucun effet de bord lui-même.
+    OpenInBrowser {
+        url: String,
+    },
     Quit,
 }
 
@@ -246,6 +251,11 @@ impl App {
                 return vec![Command::Quit];
             }
             Key::Char('r') => return self.refresh(),
+            Key::Char('o') => return self.open_in_browser(),
+            // La fenêtre de fusion et ses contrôles appartiennent à
+            // `04-fusion.md`. La touche est reconnue ici pour ne pas tomber
+            // dans un bras de navigation, et ne fait rien de plus.
+            Key::Char('m') => return Vec::new(),
             _ => {}
         }
 
@@ -306,6 +316,21 @@ impl App {
             return Vec::new();
         }
         vec![self.fetch_detail(resume)]
+    }
+
+    /// URL de la pull request affichée : la sélection dans la liste, la PR
+    /// ouverte dans le détail.
+    fn open_in_browser(&self) -> Vec<Command> {
+        let resume = match &self.view {
+            View::List => self.selected_pr(),
+            View::Detail { key, .. } => self.prs.iter().find(|pr| &pr.key == key),
+        };
+        match resume {
+            Some(pr) => vec![Command::OpenInBrowser {
+                url: pr.url.clone(),
+            }],
+            None => Vec::new(),
+        }
     }
 
     fn fetch_detail(&mut self, summary: PrSummary) -> Command {
@@ -1150,5 +1175,45 @@ pub(crate) mod tests {
         });
         assert_eq!(app.error.as_deref(), Some("Réseau injoignable."));
         assert!(!app.loading.detail);
+    }
+
+    #[test]
+    fn o_ouvre_la_pr_selectionnee_dans_le_navigateur() {
+        let mut app = app_garnie(vec![pr(1), pr(2)]);
+        app.handle(Event::Key(Key::Down));
+        assert_eq!(
+            app.handle(Event::Key(Key::Char('o'))),
+            vec![Command::OpenInBrowser {
+                url: "https://github.com/moi/depot/pull/2".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn o_en_vue_detail_ouvre_la_pr_affichee() {
+        let mut app = app_garnie(vec![pr(1), pr(2)]);
+        app.handle(Event::Key(Key::Down));
+        ouvrir_detail(&mut app);
+        assert_eq!(
+            app.handle(Event::Key(Key::Char('o'))),
+            vec![Command::OpenInBrowser {
+                url: "https://github.com/moi/depot/pull/2".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn o_sur_une_liste_vide_ne_fait_rien() {
+        let mut app = app_garnie(vec![]);
+        assert!(app.handle(Event::Key(Key::Char('o'))).is_empty());
+    }
+
+    #[test]
+    fn m_est_reconnue_et_reste_sans_effet_jusqu_a_la_spec_04() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let commandes = app.handle(Event::Key(Key::Char('m')));
+        assert!(commandes.is_empty(), "commandes = {commandes:?}");
+        assert!(matches!(app.view, View::List), "aucun changement de vue");
+        assert!(app.error.is_none(), "et aucun message d'erreur");
     }
 }

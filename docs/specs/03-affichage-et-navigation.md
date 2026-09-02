@@ -163,6 +163,10 @@ distingue que `Char` et `Other`, `ui::draw` dessine toujours la liste, et
 d'action, ajoute la vue courante à `App`, et fait de `ui::draw` un véritable
 aiguillage.
 
+Le champ `merge` de `App` et le blocage du rafraîchissement pendant la fenêtre
+de fusion ne sont pas apportés par cette spec : la touche `m` y est reconnue
+mais sans effet, et `04-fusion.md` s'en charge.
+
 ## Critères de réussite
 
 Tous vérifiables sans terminal, en envoyant des événements à `App` :

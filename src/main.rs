@@ -188,6 +188,15 @@ fn execute_command(
                 });
             });
         }
+        Command::OpenInBrowser { url } => {
+            // Dans une tâche bloquante : lancer le navigateur peut prendre un
+            // instant, et l'écran doit rester réactif pendant ce temps.
+            // Un échec reste silencieux ; la remontée des erreurs de cette
+            // nature appartient à `05-erreurs-et-tests.md`.
+            tokio::task::spawn_blocking(move || {
+                let _ = open::that_detached(&url);
+            });
+        }
     }
     false
 }
