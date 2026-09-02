@@ -102,7 +102,7 @@ seule fois, à sa construction.
 chaîne toute faite et n'assemble plus rien : l'ancienne jointure `github::search_query`
 a disparu, et la syntaxe de recherche ne vit plus qu'ici.
 
-Trois précisions que le tableau des correspondances ne dit pas :
+Quatre précisions que le tableau des correspondances ne dit pas :
 
 - `Filter::parse` accepte un libellé avec ou sans guillemets — `label:"bug"` comme
   `label:bug` donnent `Label("bug")`, qui se réécrit `label:"bug"`.
@@ -110,6 +110,10 @@ Trois précisions que le tableau des correspondances ne dit pas :
   part en `Raw`, transmis tel quel.
 - `build_query` écarte les fragments vides, et n'enlève aucun doublon : `is:pr`
   écrit dans les réglages apparaît deux fois dans la requête, ce que GitHub accepte.
+- `Filter::parse` retire les espaces en début et en fin de chaîne avant toute
+  reconnaissance : un `Raw` issu des réglages perd donc lui aussi ses espaces de
+  bord — `"  involves:@me  "` donne `Raw("involves:@me")`, malgré le « telle
+  quelle » du tableau ci-dessus.
 
 ## Critères de réussite
 

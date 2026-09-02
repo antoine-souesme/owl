@@ -252,4 +252,12 @@ mod tests {
     fn les_espaces_autour_d_un_filtre_sont_ignorees() {
         assert_eq!(Filter::parse("  is:open  "), Filter::Open);
     }
+
+    #[test]
+    fn is_pr_ecrit_dans_les_reglages_apparait_deux_fois_dans_la_requete() {
+        assert_eq!(
+            build_query(&[Filter::parse("is:pr")]),
+            "is:pr is:pr sort:updated-desc"
+        );
+    }
 }
