@@ -2378,4 +2378,55 @@ pub(crate) mod tests {
             "owl ne doit jamais réessayer en boucle une requête refusée pour limite"
         );
     }
+
+    #[test]
+    fn une_panne_reseau_laisse_la_liste_affichee() {
+        let mut app = app_garnie(vec![pr(1), pr(2)]);
+        let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
+            Command::FetchList { generation, .. } => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        app.handle(Event::ListLoaded {
+            generation,
+            result: Err(GithubError::Transport),
+        });
+        assert_eq!(app.prs.len(), 2, "la liste précédente reste visible");
+        assert!(
+            !app.should_quit,
+            "une panne réseau n'arrête pas le programme"
+        );
+        assert_eq!(app.error.as_deref(), Some("Réseau injoignable."));
+        assert!(
+            app.status_line(CONFORTABLE).contains("Réseau injoignable."),
+            "l'erreur s'affiche dans la barre d'état"
+        );
+        assert!(
+            app.last_refresh.is_some(),
+            "l'heure du dernier succès reste, elle mesure l'ancienneté"
+        );
+    }
+
+    #[test]
+    fn le_prochain_succes_efface_l_erreur() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let echec = match &app.handle(Event::Key(Key::Char('r')))[0] {
+            Command::FetchList { generation, .. } => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        app.handle(Event::ListLoaded {
+            generation: echec,
+            result: Err(GithubError::Transport),
+        });
+        assert!(app.error.is_some());
+
+        let succes = match &app.handle(Event::Key(Key::Char('r')))[0] {
+            Command::FetchList { generation, .. } => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        app.handle(Event::ListLoaded {
+            generation: succes,
+            result: Ok(page(vec![pr(1)])),
+        });
+        assert!(app.error.is_none(), "erreur = {:?}", app.error);
+    }
 }

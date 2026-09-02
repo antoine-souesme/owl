@@ -300,4 +300,12 @@ page_size = 100
         }
         geteuid()
     }
+
+    #[test]
+    fn le_dossier_personnel_introuvable_a_son_message() {
+        assert_eq!(
+            ConfigError::NoHomeDirectory.to_string(),
+            "Impossible de déterminer le dossier de configuration."
+        );
+    }
 }
