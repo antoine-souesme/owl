@@ -159,13 +159,13 @@ fn execute_command(
         Command::Quit => return true,
         Command::Fetch {
             generation,
-            filters,
+            query,
             page_size,
         } => {
             let envoi = envoi.clone();
             let client = client.clone();
             tokio::spawn(async move {
-                let resultat = client.fetch_pull_requests(&filters, page_size).await;
+                let resultat = client.fetch_pull_requests(&query, page_size).await;
                 let _ = envoi.send(Event::Data {
                     generation,
                     result: resultat,
