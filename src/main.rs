@@ -188,6 +188,22 @@ fn execute_command(
                 });
             });
         }
+        Command::Merge {
+            summary,
+            node_id,
+            method,
+        } => {
+            let envoi = envoi.clone();
+            let client = client.clone();
+            let cle = summary.key.clone();
+            tokio::spawn(async move {
+                let resultat = client.merge_pull_request(&summary, node_id, method).await;
+                let _ = envoi.send(Event::MergeFinished {
+                    key: cle,
+                    result: resultat,
+                });
+            });
+        }
         Command::OpenInBrowser { url } => {
             // Dans une tâche bloquante : lancer le navigateur peut prendre un
             // instant, et l'écran doit rester réactif pendant ce temps.
