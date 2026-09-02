@@ -3,7 +3,8 @@
 //! Les documents sont recopiés de `docs/specs/01-modele-et-donnees.md` sans
 //! reformulation : la spec fait foi, et une différence se lit d'un coup d'œil.
 
-// `DETAIL` est appelée par la tâche suivante, `MERGE` par la spec 04.
+// `DETAIL` est appelée par `Client::fetch_detail`. `MERGE` n'a encore aucun
+// appelant : c'est `docs/specs/04-fusion.md` qui le déclenchera.
 #![allow(dead_code)]
 
 /// Liste des pull requests. `$q` est la chaîne de recherche, `$n` le nombre

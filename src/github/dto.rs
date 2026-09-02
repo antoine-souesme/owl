@@ -5,7 +5,8 @@
 //! type `ISSUE` ramène aussi des issues, dont le nœud n'a aucun des champs
 //! d'une pull request.
 
-// Les tâches suivantes et la spec 03 consomment le reste de ces types.
+// La vue détail de `docs/specs/03-affichage-et-navigation.md` consomme le
+// reste de ces types.
 #![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
@@ -83,8 +84,8 @@ pub struct Rollup {
     pub contexts: Option<ContextConnection>,
 }
 
-/// Vide à cette tâche : la requête de liste ne demande pas les contextes.
-/// La tâche 4 la remplit.
+/// Vide côté requête de liste, qui ne demande pas les contextes. Seule la
+/// requête de détail les remplit.
 #[derive(Debug, Deserialize)]
 pub struct ContextConnection {
     pub nodes: Vec<Option<ContextNode>>,
@@ -430,7 +431,7 @@ fn review_from_review_state(state: Option<&str>) -> ReviewState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ChecksState, ListPage, MergeableState, PrKey, RepoMergeRules, ReviewState};
+    use crate::model::{ChangedFile, CheckRun, PrDetail};
     use serde::Deserialize;
 
     /// Enveloppe de la réponse enregistrée, dont seul `data` nous intéresse.
@@ -560,8 +561,6 @@ mod tests {
         assert_eq!(limite.remaining, 4987);
         assert_eq!(limite.reset_at.to_rfc3339(), "2026-08-30T10:00:00+00:00");
     }
-
-    use crate::model::{ChangedFile, CheckRun, PrDetail};
 
     #[derive(Deserialize)]
     struct EnveloppeDetail {

@@ -89,7 +89,7 @@ impl Client {
     }
 
     /// Point d'entrée réglable : les tests visent un serveur local.
-    pub fn with_endpoint(token: &str, endpoint: &str) -> Result<Self, GithubError> {
+    fn with_endpoint(token: &str, endpoint: &str) -> Result<Self, GithubError> {
         let mut entetes = HeaderMap::new();
 
         let mut autorisation = HeaderValue::from_str(&format!("Bearer {token}"))
@@ -104,6 +104,11 @@ impl Client {
 
         let http = reqwest::Client::builder()
             .default_headers(entetes)
+            // Une connexion pendue ne renvoie jamais d'événement : sans
+            // délai maximal, la barre d'état resterait bloquée sur son
+            // message de chargement et les tâches de rafraîchissement
+            // s'empileraient sans fin.
+            .timeout(std::time::Duration::from_secs(20))
             .build()
             .map_err(|_| GithubError::Transport)?;
 
@@ -426,6 +431,21 @@ mod tests {
             .await
             .expect_err("erreur attendue");
         assert_eq!(erreur.to_string(), "GitHub a répondu 502.");
+    }
+
+    #[tokio::test]
+    async fn des_donnees_nulles_sans_erreur_sont_une_reponse_illisible() {
+        let erreur = appel("200 OK", &[], r#"{"data":null}"#)
+            .await
+            .expect_err("erreur attendue");
+        assert!(matches!(erreur, GithubError::Malformed));
+    }
+
+    #[tokio::test]
+    async fn une_liste_sans_solde_d_appels_ne_porte_aucun_solde() {
+        let corps = r#"{"data":{"search":{"nodes":[]}}}"#;
+        let page = appel("200 OK", &[], corps).await.expect("succès attendu");
+        assert!(page.rate_limit.is_none());
     }
 
     #[test]
