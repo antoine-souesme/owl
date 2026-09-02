@@ -49,6 +49,42 @@ impl Filter {
             Filter::Raw(expression) => expression.clone(),
         }
     }
+
+    /// Reconnaît une chaîne du fichier de réglages. Une chaîne non reconnue
+    /// devient `Raw`, ce qui la transmet à GitHub telle quelle : mieux vaut
+    /// une expression que `owl` ne comprend pas qu'un filtre perdu.
+    pub fn parse(texte: &str) -> Filter {
+        let texte = texte.trim();
+
+        match texte {
+            "author:@me" => return Filter::AuthoredByMe,
+            "review-requested:@me" => return Filter::ReviewRequestedFromMe,
+            "assignee:@me" => return Filter::AssignedToMe,
+            "is:open" => return Filter::Open,
+            "draft:true" => return Filter::Draft(true),
+            "draft:false" => return Filter::Draft(false),
+            _ => {}
+        }
+
+        // Filtres à valeur. Un préfixe sans valeur n'est pas un filtre : il
+        // part en `Raw` plutôt que de fabriquer un `org:` vide.
+        for (prefixe, construire) in [
+            ("org:", Filter::Org as fn(String) -> Filter),
+            ("repo:", Filter::Repo as fn(String) -> Filter),
+            ("label:", Filter::Label as fn(String) -> Filter),
+        ] {
+            if let Some(valeur) = texte.strip_prefix(prefixe) {
+                // Les guillemets sont la forme que produit `fragment` ; les
+                // retirer ici est ce qui rend l'aller-retour fidèle.
+                let valeur = valeur.trim_matches('"');
+                if !valeur.is_empty() {
+                    return construire(valeur.to_string());
+                }
+            }
+        }
+
+        Filter::Raw(texte.to_string())
+    }
 }
 
 /// Assemble les fragments et garantit la présence de `is:pr` et du tri.
@@ -146,5 +182,76 @@ mod tests {
         let requete = build_query(&[Filter::Raw(String::new()), Filter::Open]);
         assert_eq!(requete, "is:pr is:open sort:updated-desc");
         assert!(!requete.contains("  "), "requete = {requete}");
+    }
+
+    #[test]
+    fn chaque_fragment_de_la_spec_se_relit_en_son_filtre() {
+        let cas = [
+            ("author:@me", Filter::AuthoredByMe),
+            ("review-requested:@me", Filter::ReviewRequestedFromMe),
+            ("assignee:@me", Filter::AssignedToMe),
+            ("is:open", Filter::Open),
+            ("draft:true", Filter::Draft(true)),
+            ("draft:false", Filter::Draft(false)),
+            ("org:acme", Filter::Org("acme".to_string())),
+            ("repo:acme/owl", Filter::Repo("acme/owl".to_string())),
+            ("label:\"bug\"", Filter::Label("bug".to_string())),
+        ];
+        for (texte, attendu) in cas {
+            assert_eq!(Filter::parse(texte), attendu, "texte = {texte}");
+        }
+    }
+
+    #[test]
+    fn un_filtre_se_relit_depuis_son_propre_fragment() {
+        let filtres = [
+            Filter::AuthoredByMe,
+            Filter::ReviewRequestedFromMe,
+            Filter::AssignedToMe,
+            Filter::Open,
+            Filter::Draft(true),
+            Filter::Draft(false),
+            Filter::Org("acme".to_string()),
+            Filter::Repo("acme/owl".to_string()),
+            Filter::Label("needs review".to_string()),
+        ];
+        for filtre in filtres {
+            assert_eq!(
+                Filter::parse(&filtre.fragment()),
+                filtre,
+                "aller-retour cassé pour {filtre:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn un_libelle_sans_guillemets_est_accepte() {
+        assert_eq!(Filter::parse("label:bug"), Filter::Label("bug".to_string()));
+    }
+
+    #[test]
+    fn une_chaine_inconnue_devient_raw_et_reste_intacte() {
+        let inconnue = "involves:@me -is:draft";
+        assert_eq!(Filter::parse(inconnue), Filter::Raw(inconnue.to_string()));
+        assert!(
+            build_query(&[Filter::parse(inconnue)]).contains(inconnue),
+            "l'expression doit traverser la requête sans retouche"
+        );
+    }
+
+    #[test]
+    fn un_prefixe_sans_valeur_reste_raw() {
+        for texte in ["org:", "repo:", "label:", "draft:peut-etre", "is:closed"] {
+            assert_eq!(
+                Filter::parse(texte),
+                Filter::Raw(texte.to_string()),
+                "texte = {texte}"
+            );
+        }
+    }
+
+    #[test]
+    fn les_espaces_autour_d_un_filtre_sont_ignorees() {
+        assert_eq!(Filter::parse("  is:open  "), Filter::Open);
     }
 }
