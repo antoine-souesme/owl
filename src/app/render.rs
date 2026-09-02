@@ -157,7 +157,7 @@ fn titre_affiche(pr: &PrSummary) -> String {
 /// Coupe à la largeur donnée, en marquant la coupe. La mesure se fait en
 /// caractères : compter les colonnes réellement occupées demanderait une
 /// dépendance de plus.
-fn tronquer(texte: &str, largeur: usize) -> String {
+pub(super) fn tronquer(texte: &str, largeur: usize) -> String {
     if texte.chars().count() <= largeur {
         return texte.to_string();
     }
@@ -253,14 +253,7 @@ impl App {
             return Vec::new();
         };
         let cache = self.details.get(key);
-        // Repli : si la PR a quitté la liste, le résumé vient du détail en
-        // cache, qui porte le sien, plutôt que de rendre l'écran vide.
-        let Some(resume) = self
-            .prs
-            .iter()
-            .find(|pr| &pr.key == key)
-            .or_else(|| cache.map(|cache| &cache.detail.summary))
-        else {
+        let Some(resume) = self.resume_affiche(key) else {
             return Vec::new();
         };
 
@@ -478,7 +471,9 @@ mod tests {
     fn le_detail_donne_les_etats_en_clair() {
         let textes = textes(&app_en_detail(1)).join("\n");
         assert!(textes.contains("de ma-branche vers develop"), "{textes}");
-        assert!(textes.contains("moi"), "l'auteur : {textes}");
+        // « par moi » et pas « moi » : « moi » figure déjà dans le dépôt de
+        // la ligne d'en-tête, l'assertion tiendrait sans ligne d'auteur.
+        assert!(textes.contains("par moi"), "l'auteur : {textes}");
         assert!(
             textes.contains("toutes les vérifications passent"),
             "les mêmes états que la liste, en clair : {textes}"

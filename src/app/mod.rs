@@ -9,6 +9,8 @@ mod render;
 
 pub use render::{ListRender, ListRow, Tone};
 
+use render::tronquer;
+
 use std::collections::HashMap;
 
 use chrono::{DateTime, Local};
@@ -238,6 +240,7 @@ impl App {
                     }
                     Err(erreur) => self.error = Some(erreur.to_string()),
                 }
+                self.borner_le_defilement();
                 Vec::new()
             }
         }
@@ -293,9 +296,9 @@ impl App {
             View::List => vec![self.fetch_list()],
             View::Detail { key, .. } => {
                 let cle = key.clone();
-                match self.prs.iter().find(|pr| pr.key == cle).cloned() {
+                match self.resume_affiche(&cle).cloned() {
                     Some(resume) => vec![self.fetch_detail(resume)],
-                    // La PR a disparu de la liste : rien à recharger.
+                    // Ni dans la liste, ni en cache : rien à recharger.
                     None => Vec::new(),
                 }
             }
@@ -318,12 +321,25 @@ impl App {
         vec![self.fetch_detail(resume)]
     }
 
+    /// Résumé de la pull request d'une clé donnée : celui de la liste, ou à
+    /// défaut celui que porte le détail en cache.
+    ///
+    /// Le repli n'est pas un détail d'affichage : quand un rafraîchissement
+    /// retire la PR alors que son détail reste ouvert, c'est la seule source
+    /// du résumé, et `o` comme `r` en ont besoin autant que le dessin.
+    pub(crate) fn resume_affiche(&self, key: &PrKey) -> Option<&PrSummary> {
+        self.prs
+            .iter()
+            .find(|pr| &pr.key == key)
+            .or_else(|| self.details.get(key).map(|cache| &cache.detail.summary))
+    }
+
     /// URL de la pull request affichée : la sélection dans la liste, la PR
     /// ouverte dans le détail.
     fn open_in_browser(&self) -> Vec<Command> {
         let resume = match &self.view {
             View::List => self.selected_pr(),
-            View::Detail { key, .. } => self.prs.iter().find(|pr| &pr.key == key),
+            View::Detail { key, .. } => self.resume_affiche(key),
         };
         match resume {
             Some(pr) => vec![Command::OpenInBrowser {
@@ -354,10 +370,27 @@ impl App {
     /// pas connue ici : la dernière ligne reste atteignable, et le dessin ne
     /// peut de toute façon pas défiler au-delà.
     fn scroll_detail(&mut self, pas: i32) {
-        let maximum = self.detail_line_count().saturating_sub(1) as u16;
+        let maximum = i64::from(self.derniere_ligne_du_detail());
         if let View::Detail { scroll, .. } = &mut self.view {
             let vise = i64::from(*scroll) + i64::from(pas);
-            *scroll = vise.clamp(0, i64::from(maximum)) as u16;
+            *scroll = vise.clamp(0, maximum) as u16;
+        }
+    }
+
+    /// Indice de la dernière ligne du détail, saturé plutôt que tronqué : un
+    /// détail de plus de 65 536 lignes ne doit pas ramener le défilement en
+    /// haut de page.
+    fn derniere_ligne_du_detail(&self) -> u16 {
+        u16::try_from(self.detail_line_count().saturating_sub(1)).unwrap_or(u16::MAX)
+    }
+
+    /// Re-borne le défilement au contenu. Un détail rechargé peut être plus
+    /// court que le précédent : sans cela, l'écran resterait vide jusqu'à ce
+    /// que l'utilisateur remonte.
+    fn borner_le_defilement(&mut self) {
+        let maximum = self.derniere_ligne_du_detail();
+        if let View::Detail { scroll, .. } = &mut self.view {
+            *scroll = (*scroll).min(maximum);
         }
     }
 
@@ -412,43 +445,73 @@ impl App {
         }
     }
 
-    /// Barre d'état complète, prête à dessiner telle quelle.
+    /// Barre d'état complète, prête à dessiner telle quelle, pour la largeur
+    /// donnée.
     ///
     /// Assemblée ici, et pas dans `ui`, parce que chaque morceau est une
     /// décision : le libellé de l'heure, l'annonce d'une requête en cours,
-    /// l'aide clavier.
-    pub fn status_line(&self) -> String {
-        let mut morceaux: Vec<String> = Vec::new();
+    /// l'aide clavier. La largeur en est une aussi : à 80 colonnes, l'aide
+    /// seule ne tient pas avec le reste, et il faut choisir plutôt que laisser
+    /// la bibliothèque de dessin rogner la ligne en silence.
+    ///
+    /// Règle : chaque morceau porte son rang de sacrifice ; tant que la ligne
+    /// dépasse, le rang le plus élevé est retiré. L'aide part la première —
+    /// c'est un rappel, pas une information — puis l'heure, puis le résumé de
+    /// la liste, puis l'annonce du chargement. L'erreur en cours reste, et
+    /// n'est tronquée qu'en dernier recours, si la largeur ne tient même pas
+    /// un morceau.
+    pub fn status_line(&self, width: u16) -> String {
+        // Rangs de sacrifice, du plus retenu au premier lâché.
+        const ERREUR: u8 = 0;
+        const CHARGEMENT: u8 = 1;
+        const RESUME: u8 = 2;
+        const HEURE: u8 = 3;
+        const AIDE: u8 = 4;
+
+        let mut morceaux: Vec<(u8, String)> = Vec::new();
 
         if self.last_refresh.is_none() && self.error.is_none() {
             // Rien n'est encore arrivé : l'attente est le message principal.
-            morceaux.push(ATTENTE_INITIALE.to_string());
+            morceaux.push((ERREUR, ATTENTE_INITIALE.to_string()));
         } else {
             if self.last_refresh.is_some() {
-                morceaux.push(self.liste_resumee());
+                morceaux.push((RESUME, self.liste_resumee()));
             }
             if let Some(instant) = self.last_refresh {
-                morceaux.push(format!("mis à jour à {}", instant.format("%H:%M")));
+                morceaux.push((HEURE, format!("mis à jour à {}", instant.format("%H:%M"))));
             }
             if self.loading.list || self.loading.detail {
-                morceaux.push("chargement…".to_string());
+                morceaux.push((CHARGEMENT, "chargement…".to_string()));
             }
             if let Some(erreur) = &self.error {
-                morceaux.push(erreur.clone());
+                morceaux.push((ERREUR, erreur.clone()));
             }
         }
 
-        morceaux.push(
+        morceaux.push((
+            AIDE,
             match self.view {
                 View::List => AIDE_LISTE,
                 View::Detail { .. } => AIDE_DETAIL,
             }
             .to_string(),
-        );
-        morceaux.join(" · ")
+        ));
+
+        let largeur = width as usize;
+        while morceaux.len() > 1 && assembler(&morceaux).chars().count() > largeur {
+            let sacrifie = morceaux
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, (rang, _))| *rang)
+                .map(|(indice, _)| indice)
+                .expect("la liste n'est pas vide");
+            morceaux.remove(sacrifie);
+        }
+        tronquer(&assembler(&morceaux), largeur)
     }
 
-    /// Résumé de la liste pour la barre d'état.
+    /// Résumé de la liste pour la barre d'état, jamais tronqué autrement que
+    /// par le retrait d'un morceau entier.
     fn liste_resumee(&self) -> String {
         match self.prs.len() {
             0 => "Aucune pull request".to_string(),
@@ -456,6 +519,15 @@ impl App {
             nombre => format!("{nombre} pull requests"),
         }
     }
+}
+
+/// Assemble les morceaux retenus de la barre d'état, dans l'ordre d'affichage.
+fn assembler(morceaux: &[(u8, String)]) -> String {
+    morceaux
+        .iter()
+        .map(|(_, texte)| texte.as_str())
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 #[cfg(test)]
@@ -466,6 +538,9 @@ pub(crate) mod tests {
         ChangedFile, CheckRun, ChecksState, Comment, MergeableState, RepoMergeRules, Review,
         ReviewState,
     };
+
+    /// Largeur où la barre d'état tient tout entière, aide comprise.
+    const CONFORTABLE: u16 = 200;
 
     pub(crate) fn pr(numero: u32) -> PrSummary {
         PrSummary {
@@ -680,9 +755,9 @@ pub(crate) mod tests {
             result: Ok(page(vec![pr(1), pr(2)])),
         });
         assert!(
-            app.status_line().starts_with("2 pull requests"),
+            app.status_line(CONFORTABLE).starts_with("2 pull requests"),
             "{}",
-            app.status_line()
+            app.status_line(CONFORTABLE)
         );
 
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
@@ -694,9 +769,10 @@ pub(crate) mod tests {
             result: Ok(page(vec![])),
         });
         assert!(
-            app.status_line().starts_with("Aucune pull request"),
+            app.status_line(CONFORTABLE)
+                .starts_with("Aucune pull request"),
             "{}",
-            app.status_line()
+            app.status_line(CONFORTABLE)
         );
     }
 
@@ -720,7 +796,10 @@ pub(crate) mod tests {
     #[test]
     fn la_barre_d_etat_au_demarrage_n_annonce_l_attente_qu_une_fois() {
         let (app, _) = app_demarree();
-        assert_eq!(app.status_line(), format!("Chargement… · {AIDE_LISTE}"));
+        assert_eq!(
+            app.status_line(CONFORTABLE),
+            format!("Chargement… · {AIDE_LISTE}")
+        );
     }
 
     #[test]
@@ -732,7 +811,7 @@ pub(crate) mod tests {
         });
         let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
         assert_eq!(
-            app.status_line(),
+            app.status_line(CONFORTABLE),
             format!("2 pull requests · mis à jour à {heure} · {AIDE_LISTE}")
         );
     }
@@ -747,7 +826,7 @@ pub(crate) mod tests {
         app.handle(Event::Key(Key::Char('r')));
         let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
         assert_eq!(
-            app.status_line(),
+            app.status_line(CONFORTABLE),
             format!("1 pull request · mis à jour à {heure} · chargement… · {AIDE_LISTE}")
         );
     }
@@ -760,9 +839,86 @@ pub(crate) mod tests {
             result: Err(GithubError::Transport),
         });
         assert_eq!(
-            app.status_line(),
+            app.status_line(CONFORTABLE),
             format!("Réseau injoignable. · {AIDE_LISTE}"),
             "aucune heure : aucun rafraîchissement n'a encore réussi"
+        );
+    }
+
+    #[test]
+    fn la_barre_d_etat_ne_depasse_jamais_la_largeur_donnee() {
+        let mut app = app_garnie(vec![pr(1), pr(2)]);
+        // 80 colonnes : la largeur d'un terminal standard, où l'aide seule ne
+        // tient déjà pas avec le résumé et l'heure.
+        for largeur in [1, 12, 40, 80, 117, CONFORTABLE] {
+            let barre = app.status_line(largeur);
+            assert!(
+                barre.chars().count() <= largeur as usize,
+                "largeur {largeur} : {barre}"
+            );
+        }
+        app.handle(Event::Key(Key::Right));
+        for largeur in [1, 40, 80, CONFORTABLE] {
+            let barre = app.status_line(largeur);
+            assert!(
+                barre.chars().count() <= largeur as usize,
+                "en vue détail, largeur {largeur} : {barre}"
+            );
+        }
+    }
+
+    #[test]
+    fn une_barre_d_etat_etroite_sacrifie_l_aide_avant_le_reste() {
+        let app = app_garnie(vec![pr(1), pr(2)]);
+        let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
+
+        assert_eq!(
+            app.status_line(CONFORTABLE),
+            format!("2 pull requests · mis à jour à {heure} · {AIDE_LISTE}"),
+            "au large, tout tient"
+        );
+
+        let etroite = app.status_line(80);
+        assert!(
+            !etroite.contains("naviguer"),
+            "l'aide est un rappel : elle part la première ({etroite})"
+        );
+        assert_eq!(
+            etroite,
+            format!("2 pull requests · mis à jour à {heure}"),
+            "le résumé et l'heure restent entiers"
+        );
+    }
+
+    #[test]
+    fn une_barre_d_etat_tres_etroite_garde_l_erreur() {
+        let (mut app, generation) = app_demarree();
+        app.handle(Event::ListLoaded {
+            generation,
+            result: Err(GithubError::Transport),
+        });
+        assert_eq!(
+            app.status_line(30),
+            "Réseau injoignable.",
+            "l'erreur est ce qu'on garde en dernier"
+        );
+    }
+
+    #[test]
+    fn l_aide_clavier_suit_la_vue_affichee() {
+        let mut app = app_garnie(vec![pr(1)]);
+        assert!(
+            app.status_line(CONFORTABLE).ends_with(AIDE_LISTE),
+            "{}",
+            app.status_line(CONFORTABLE)
+        );
+
+        app.handle(Event::Key(Key::Right));
+        let barre = app.status_line(CONFORTABLE);
+        assert!(barre.ends_with(AIDE_DETAIL), "{barre}");
+        assert!(
+            barre.contains("← liste") && !barre.contains("→ détail"),
+            "une touche sans effet dans la vue n'est pas rappelée : {barre}"
         );
     }
 
@@ -1199,6 +1355,93 @@ pub(crate) mod tests {
             vec![Command::OpenInBrowser {
                 url: "https://github.com/moi/depot/pull/2".to_string()
             }]
+        );
+    }
+
+    /// Détail ouvert et chargé, puis PR retirée de la liste — fusionnée,
+    /// fermée, ou sortie du filtre — alors que la vue reste affichée.
+    fn app_en_detail_hors_liste() -> App {
+        let mut app = app_garnie(vec![pr(1)]);
+        let generation = ouvrir_detail(&mut app);
+        app.handle(Event::DetailLoaded {
+            generation,
+            key: pr(1).key,
+            result: Ok(detail(1)),
+        });
+        let generation_liste = match &app.handle(Event::Tick)[..] {
+            [Command::FetchList { generation, .. }] => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        app.handle(Event::ListLoaded {
+            generation: generation_liste,
+            result: Ok(page(vec![])),
+        });
+        assert!(app.prs.is_empty(), "la PR a bien quitté la liste");
+        app
+    }
+
+    #[test]
+    fn o_ouvre_encore_une_pr_qui_a_quitte_la_liste() {
+        let mut app = app_en_detail_hors_liste();
+        assert_eq!(
+            app.handle(Event::Key(Key::Char('o'))),
+            vec![Command::OpenInBrowser {
+                url: "https://github.com/moi/depot/pull/1".to_string()
+            }],
+            "l'URL est dans le résumé porté par le détail en cache"
+        );
+    }
+
+    #[test]
+    fn r_recharge_encore_une_pr_qui_a_quitte_la_liste() {
+        let mut app = app_en_detail_hors_liste();
+        match &app.handle(Event::Key(Key::Char('r')))[..] {
+            [Command::FetchDetail { summary, .. }] => assert_eq!(summary.key, pr(1).key),
+            autre => panic!("commande inattendue : {autre:?}"),
+        }
+    }
+
+    #[test]
+    fn un_detail_devenu_plus_court_reborne_le_defilement() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let generation = ouvrir_detail(&mut app);
+        app.handle(Event::DetailLoaded {
+            generation,
+            key: pr(1).key,
+            result: Ok(detail(1)),
+        });
+        for _ in 0..500 {
+            app.handle(Event::Key(Key::Down));
+        }
+        let bas = app.detail_scroll();
+        assert!(bas > 0, "le défilement est bien descendu");
+
+        // Rechargement : la description et les échanges ont disparu, le
+        // contenu est nettement plus court que le défilement en cours.
+        let generation = match &app.handle(Event::Key(Key::Char('r')))[..] {
+            [Command::FetchDetail { generation, .. }] => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        app.handle(Event::DetailLoaded {
+            generation,
+            key: pr(1).key,
+            result: Ok(PrDetail {
+                body: String::new(),
+                checks: Vec::new(),
+                reviews: Vec::new(),
+                comments: Vec::new(),
+                files: Vec::new(),
+                ..detail(1)
+            }),
+        });
+
+        assert!(app.detail_scroll() < bas, "le défilement a été ramené");
+        assert!(
+            (app.detail_scroll() as usize) < app.detail_line_count(),
+            "sinon l'écran reste vide jusqu'à ce qu'on remonte : défilement \
+             {} pour {} lignes",
+            app.detail_scroll(),
+            app.detail_line_count()
         );
     }
 

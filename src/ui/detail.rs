@@ -41,5 +41,5 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
         interieur,
     );
 
-    frame.render_widget(Paragraph::new(app.status_line()), zones[1]);
+    frame.render_widget(Paragraph::new(app.status_line(zones[1].width)), zones[1]);
 }

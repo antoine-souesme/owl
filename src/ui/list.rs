@@ -47,7 +47,9 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    frame.render_widget(Paragraph::new(app.status_line()), zones[1]);
+    // La largeur de la barre lui est donnée : c'est `app` qui décide de ce
+    // qu'elle sacrifie quand la place manque, pas le rognage du `Paragraph`.
+    frame.render_widget(Paragraph::new(app.status_line(zones[1].width)), zones[1]);
 }
 
 /// Une ligne : deux pictogrammes colorés, à largeur fixe, puis le texte.

@@ -165,6 +165,12 @@ dernier rafraîchissement réussi, et l'erreur en cours s'il y en a une. Elle se
 par l'aide clavier de la vue affichée : une touche qui ne fait rien dans la vue
 courante n'y est pas rappelée.
 
+Cette barre ne dépasse jamais la largeur de la fenêtre, et c'est `app` qui décide
+de sa coupe : quand la place manque, les morceaux sont retirés entiers, du moins
+important au plus important. L'aide clavier part la première — c'est un rappel, pas
+une information — puis l'heure du dernier rafraîchissement, puis le résumé de la
+liste, puis l'annonce du chargement. L'erreur en cours est ce qui reste en dernier.
+
 Une liste vide affiche « Aucune pull request » avec un rappel des filtres actifs —
 sans quoi un filtre trop restrictif ressemble à une panne.
 
