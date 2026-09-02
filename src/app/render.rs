@@ -252,7 +252,15 @@ impl App {
         let View::Detail { key, .. } = &self.view else {
             return Vec::new();
         };
-        let Some(resume) = self.prs.iter().find(|pr| &pr.key == key) else {
+        let cache = self.details.get(key);
+        // Repli : si la PR a quitté la liste, le résumé vient du détail en
+        // cache, qui porte le sien, plutôt que de rendre l'écran vide.
+        let Some(resume) = self
+            .prs
+            .iter()
+            .find(|pr| &pr.key == key)
+            .or_else(|| cache.map(|cache| &cache.detail.summary))
+        else {
             return Vec::new();
         };
 
@@ -264,7 +272,7 @@ impl App {
             DetailLine::simple(format!("par {}", resume.author)),
         ];
 
-        match self.details.get(key) {
+        match cache {
             None => lignes.push(DetailLine::simple(CHARGEMENT_DETAIL)),
             Some(cache) => {
                 lignes.extend(corps_du_detail(
@@ -412,7 +420,7 @@ mod tests {
     use super::*;
 
     use crate::app::tests::detail;
-    use crate::app::tests::{app_garnie, pr, pr_de};
+    use crate::app::tests::{app_garnie, page, pr, pr_de};
     use crate::app::{Command, Event, Key, View};
     use crate::config::Config;
 
@@ -526,6 +534,33 @@ mod tests {
         for ligne in app.detail_lines(40) {
             assert!(ligne.text.chars().count() <= 40, "ligne = {}", ligne.text);
         }
+    }
+
+    #[test]
+    fn un_detail_en_cache_reste_affichable_si_la_pr_quitte_la_liste() {
+        let mut app = app_en_detail(1);
+
+        // La PR quitte la liste (fusionnée, filtrée...) pendant que le détail reste ouvert.
+        let generation_liste = match &app.handle(Event::Tick)[..] {
+            [Command::FetchList { generation, .. }] => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        app.handle(Event::ListLoaded {
+            generation: generation_liste,
+            result: Ok(page(vec![])),
+        });
+
+        let textes = textes(&app);
+        assert!(
+            textes[0].contains("Titre 1"),
+            "l'en-tête vient du résumé porté par le détail en cache : {textes:?}"
+        );
+        assert!(
+            textes
+                .iter()
+                .any(|ligne| ligne.contains("de ma-branche vers develop")),
+            "le corps reste composé depuis le cache : {textes:?}"
+        );
     }
 
     #[test]

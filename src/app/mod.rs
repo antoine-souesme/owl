@@ -951,11 +951,20 @@ pub(crate) mod tests {
                 body: "Rebasé.".to_string(),
                 created_at: "2026-08-30T11:00:00Z".parse().expect("date valide"),
             }],
-            files: vec![ChangedFile {
-                path: "src/app/mod.rs".to_string(),
-                additions: 12,
-                deletions: 3,
-            }],
+            files: vec![
+                ChangedFile {
+                    path: "src/app/mod.rs".to_string(),
+                    additions: 12,
+                    deletions: 3,
+                },
+                // Chemin délibérément long : rend probante la troncature des
+                // lignes de détail.
+                ChangedFile {
+                    path: "src/app/un/chemin/de/fichier/particulierement/long/pour/verifier/la/troncature.rs".to_string(),
+                    additions: 1,
+                    deletions: 0,
+                },
+            ],
             additions: 12,
             deletions: 3,
             summary: resume,
