@@ -1,8 +1,10 @@
+mod config;
 mod token;
 
 fn main() {
-    match token::resolve() {
-        Ok(_) => println!("jeton trouvé"),
-        Err(erreur) => eprintln!("{erreur}"),
+    match (config::load(), token::resolve()) {
+        (Ok(reglages), Ok(_)) => println!("{} filtres actifs", reglages.filters.len()),
+        (Err(erreur), _) => eprintln!("{erreur}"),
+        (_, Err(erreur)) => eprintln!("{erreur}"),
     }
 }
