@@ -18,7 +18,7 @@ use chrono::{DateTime, Local};
 use crate::config::Config;
 use crate::filter::{self, Filter};
 use crate::github::GithubError;
-use crate::model::{ListPage, PrDetail, PrKey, PrSummary, RateLimit};
+use crate::model::{ListPage, MergeMethod, MergeableState, PrDetail, PrKey, PrSummary, RateLimit};
 
 /// Numéro de génération d'une demande réseau. Un résultat dont la génération
 /// est périmée est ignoré, ce qui évite qu'une réponse lente écrase une
@@ -103,9 +103,15 @@ const AIDE_LISTE: &str =
     "↑↓ naviguer · → détail · m fusionner · r rafraîchir · o navigateur · q quitter";
 const AIDE_DETAIL: &str =
     "↑↓ défiler · ← liste · m fusionner · r rafraîchir · o navigateur · q quitter";
+const AIDE_FUSION: &str = "↑↓ choisir · Entrée confirmer · Échap annuler";
 
 /// Message affiché tant qu'aucune réponse n'est arrivée.
 const ATTENTE_INITIALE: &str = "Chargement…";
+
+const REFUS_BROUILLON: &str = "Pull request en brouillon, elle doit être publiée.";
+const REFUS_CONFLITS: &str = "Conflits à résoudre.";
+const REFUS_ETAT_INCONNU: &str = "État de fusion en cours de calcul, réessaie dans un instant.";
+const REFUS_AUCUNE_METHODE: &str = "Aucune méthode de fusion autorisée sur ce dépôt.";
 
 /// Vue affichée. Le défilement voyage avec la vue : revenir à la liste puis
 /// rouvrir un détail le remet en haut, ce qui est le comportement attendu.
@@ -113,6 +119,45 @@ const ATTENTE_INITIALE: &str = "Chargement…";
 pub enum View {
     List,
     Detail { key: PrKey, scroll: u16 },
+}
+
+/// Où en est la fenêtre de confirmation.
+///
+/// `Submitting` et `Failed` ne sont pas encore posés par du code de
+/// production : l'appel réseau qui les produit arrive avec la tâche suivante.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeDialogState {
+    Choosing,
+    #[allow(dead_code)]
+    Submitting,
+    /// Message d'erreur de GitHub, repris tel quel.
+    #[allow(dead_code)]
+    Failed(String),
+}
+
+/// Fenêtre de confirmation de fusion. Tant qu'elle existe, elle capte le
+/// clavier et suspend le rafraîchissement automatique.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeDialog {
+    pub key: PrKey,
+    pub title: String,
+    /// Uniquement les méthodes autorisées par le dépôt, dans l'ordre
+    /// écrasement, rebasage, commit de fusion.
+    pub methods: Vec<MergeMethod>,
+    pub selected: usize,
+    pub state: MergeDialogState,
+}
+
+impl MergeDialog {
+    /// Méthode sous le curseur. `None` seulement sur une liste vide, cas que
+    /// les contrôles avant fusion écartent déjà.
+    ///
+    /// Pas encore appelée par du code de production : la confirmation qui
+    /// s'en sert arrive avec la tâche suivante.
+    #[allow(dead_code)]
+    pub fn method(&self) -> Option<MergeMethod> {
+        self.methods.get(self.selected).copied()
+    }
 }
 
 /// Un détail en cache, avec l'heure de son chargement : le détail peut être
@@ -142,6 +187,13 @@ pub struct App {
     pub should_quit: bool,
     pub last_refresh: Option<DateTime<Local>>,
     pub view: View,
+    /// Fenêtre de fusion ouverte, s'il y en a une.
+    pub merge: Option<MergeDialog>,
+    /// Message posé par `owl` lui-même : motif de refus de `m`, ou fusion
+    /// réussie. Distinct de `error`, qui porte les messages de GitHub et se
+    /// vide à la première réponse réussie — ce qui effacerait aussitôt
+    /// l'annonce d'une fusion, puisqu'elle relance une requête de liste.
+    pub notice: Option<String>,
     pub details: HashMap<PrKey, CachedDetail>,
     list_generation: Generation,
     detail_generation: Generation,
@@ -162,6 +214,8 @@ impl App {
             should_quit: false,
             last_refresh: None,
             view: View::List,
+            merge: None,
+            notice: None,
             details: HashMap::new(),
             list_generation: 0,
             detail_generation: 0,
@@ -191,10 +245,11 @@ impl App {
                 self.should_quit = true;
                 vec![Command::Quit]
             }
-            // Une requête de liste déjà en vol suffit : relancer ne ferait
-            // qu'ajouter un appel et jeter la réponse précédente.
+            // Une requête de liste déjà en vol suffit, et la liste ne change
+            // pas sous une fenêtre de fusion ouverte : le tour est perdu, le
+            // suivant s'en chargera.
             Event::Tick => {
-                if self.loading.list {
+                if self.loading.list || self.merge.is_some() {
                     Vec::new()
                 } else {
                     vec![self.fetch_list()]
@@ -247,24 +302,82 @@ impl App {
     }
 
     fn handle_key(&mut self, touche: Key) -> Vec<Command> {
+        // Ctrl-C avant tout, fenêtre ouverte comprise : le mode brut l'a
+        // désarmée, et c'est à `owl` de l'honorer. Sans quoi la seule sortie
+        // serait de tuer le terminal.
+        if touche == Key::CtrlC {
+            self.should_quit = true;
+            return vec![Command::Quit];
+        }
+
+        // La fenêtre de fusion capte tout le reste du clavier.
+        if self.merge.is_some() {
+            return self.handle_key_merge(touche);
+        }
+
+        // Un message posé par `owl` ne survit pas à la touche suivante.
+        self.notice = None;
+
         // Touches communes aux deux vues, traitées avant l'aiguillage.
         match touche {
-            Key::Char('q') | Key::CtrlC => {
+            Key::Char('q') => {
                 self.should_quit = true;
                 return vec![Command::Quit];
             }
             Key::Char('r') => return self.refresh(),
             Key::Char('o') => return self.open_in_browser(),
-            // La fenêtre de fusion et ses contrôles appartiennent à
-            // `04-fusion.md`. La touche est reconnue ici pour ne pas tomber
-            // dans un bras de navigation, et ne fait rien de plus.
-            Key::Char('m') => return Vec::new(),
+            Key::Char('m') => return self.open_merge(),
             _ => {}
         }
 
         match self.view {
             View::List => self.handle_key_list(touche),
             View::Detail { .. } => self.handle_key_detail(touche),
+        }
+    }
+
+    /// Ce que la touche demande à la fenêtre.
+    fn handle_key_merge(&mut self, touche: Key) -> Vec<Command> {
+        /// Décision prise pendant l'emprunt de la fenêtre, appliquée après.
+        enum Suite {
+            Rien,
+            Fermer,
+            Confirmer,
+        }
+
+        let Some(fenetre) = self.merge.as_mut() else {
+            return Vec::new();
+        };
+
+        let suite = match (&fenetre.state, touche) {
+            (MergeDialogState::Choosing, Key::Up) => {
+                // La sélection ne boucle pas, comme celle de la liste.
+                fenetre.selected = fenetre.selected.saturating_sub(1);
+                Suite::Rien
+            }
+            (MergeDialogState::Choosing, Key::Down) => {
+                if fenetre.selected + 1 < fenetre.methods.len() {
+                    fenetre.selected += 1;
+                }
+                Suite::Rien
+            }
+            (MergeDialogState::Choosing | MergeDialogState::Failed(_), Key::Esc) => Suite::Fermer,
+            (MergeDialogState::Choosing | MergeDialogState::Failed(_), Key::Enter) => {
+                Suite::Confirmer
+            }
+            // `Submitting` n'accepte rien : l'appel est parti, et fermer la
+            // fenêtre laisserait croire que la fusion est annulée.
+            _ => Suite::Rien,
+        };
+
+        match suite {
+            Suite::Rien => Vec::new(),
+            Suite::Fermer => {
+                self.merge = None;
+                Vec::new()
+            }
+            // La confirmation est câblée à la tâche suivante.
+            Suite::Confirmer => Vec::new(),
         }
     }
 
@@ -334,19 +447,70 @@ impl App {
             .or_else(|| self.details.get(key).map(|cache| &cache.detail.summary))
     }
 
+    /// Pull request visée par une action : la sélection dans la liste, la PR
+    /// ouverte dans le détail.
+    pub(crate) fn pr_affichee(&self) -> Option<&PrSummary> {
+        match &self.view {
+            View::List => self.selected_pr(),
+            View::Detail { key, .. } => self.resume_affiche(key),
+        }
+    }
+
     /// URL de la pull request affichée : la sélection dans la liste, la PR
     /// ouverte dans le détail.
     fn open_in_browser(&self) -> Vec<Command> {
-        let resume = match &self.view {
-            View::List => self.selected_pr(),
-            View::Detail { key, .. } => self.resume_affiche(key),
-        };
-        match resume {
+        match self.pr_affichee() {
             Some(pr) => vec![Command::OpenInBrowser {
                 url: pr.url.clone(),
             }],
             None => Vec::new(),
         }
+    }
+
+    /// Ouvre la fenêtre de fusion, ou dit pourquoi elle ne s'ouvre pas.
+    ///
+    /// L'état des vérifications et des relectures n'est pas contrôlé ici :
+    /// les protections de branche sont l'affaire de GitHub, qui les applique
+    /// lui-même. Dupliquer cette logique produirait des désaccords.
+    fn open_merge(&mut self) -> Vec<Command> {
+        let Some(resume) = self.pr_affichee().cloned() else {
+            return Vec::new();
+        };
+        let motif = if resume.is_draft {
+            Some(REFUS_BROUILLON)
+        } else {
+            match resume.mergeable {
+                MergeableState::Conflicting => Some(REFUS_CONFLITS),
+                MergeableState::Unknown => Some(REFUS_ETAT_INCONNU),
+                MergeableState::Mergeable => None,
+            }
+        };
+        if let Some(message) = motif {
+            self.notice = Some(message.to_string());
+            return Vec::new();
+        }
+
+        let methodes = resume.repo_rules.allowed();
+        if methodes.is_empty() {
+            self.notice = Some(REFUS_AUCUNE_METHODE.to_string());
+            return Vec::new();
+        }
+
+        // La méthode préférée si le dépôt l'autorise, sinon la première de la
+        // liste — donc l'écrasement, puis le rebasage, puis le commit de fusion.
+        let selected = methodes
+            .iter()
+            .position(|methode| *methode == self.config.preferred_merge_method)
+            .unwrap_or(0);
+
+        self.merge = Some(MergeDialog {
+            key: resume.key.clone(),
+            title: resume.title.clone(),
+            methods: methodes,
+            selected,
+            state: MergeDialogState::Choosing,
+        });
+        Vec::new()
     }
 
     fn fetch_detail(&mut self, summary: PrSummary) -> Command {
@@ -470,7 +634,7 @@ impl App {
 
         let mut morceaux: Vec<(u8, String)> = Vec::new();
 
-        if self.last_refresh.is_none() && self.error.is_none() {
+        if self.last_refresh.is_none() && self.error.is_none() && self.notice.is_none() {
             // Rien n'est encore arrivé : l'attente est le message principal.
             morceaux.push((ERREUR, ATTENTE_INITIALE.to_string()));
         } else {
@@ -488,13 +652,23 @@ impl App {
             }
         }
 
+        // Message de `owl` lui-même : motif de refus, ou fusion réussie. Au
+        // même rang que l'erreur : il ne doit pas être sacrifié à la place.
+        if let Some(message) = &self.notice {
+            morceaux.push((ERREUR, message.clone()));
+        }
+
         morceaux.push((
             AIDE,
-            match self.view {
-                View::List => AIDE_LISTE,
-                View::Detail { .. } => AIDE_DETAIL,
-            }
-            .to_string(),
+            if self.merge.is_some() {
+                AIDE_FUSION.to_string()
+            } else {
+                match self.view {
+                    View::List => AIDE_LISTE,
+                    View::Detail { .. } => AIDE_DETAIL,
+                }
+                .to_string()
+            },
         ));
 
         let largeur = width as usize;
@@ -535,8 +709,8 @@ pub(crate) mod tests {
     use super::*;
 
     use crate::model::{
-        ChangedFile, CheckRun, ChecksState, Comment, MergeableState, RepoMergeRules, Review,
-        ReviewState,
+        ChangedFile, CheckRun, ChecksState, Comment, MergeMethod, MergeableState, RepoMergeRules,
+        Review, ReviewState,
     };
 
     /// Largeur où la barre d'état tient tout entière, aide comprise.
@@ -616,6 +790,237 @@ pub(crate) mod tests {
             generation,
             result: Ok(page(liste)),
         });
+    }
+
+    /// PR dont on choisit les règles du dépôt.
+    pub(crate) fn pr_avec_regles(numero: u32, regles: RepoMergeRules) -> PrSummary {
+        PrSummary {
+            repo_rules: regles,
+            ..pr(numero)
+        }
+    }
+
+    /// Les trois méthodes autorisées.
+    fn tout_autorise() -> RepoMergeRules {
+        RepoMergeRules {
+            squash: true,
+            merge: true,
+            rebase: true,
+            delete_branch_on_merge: true,
+        }
+    }
+
+    /// Application garnie d'une seule PR, `m` déjà pressée.
+    fn app_fenetre_ouverte(pr: PrSummary) -> App {
+        let mut app = app_garnie(vec![pr]);
+        app.handle(Event::Key(Key::Char('m')));
+        app
+    }
+
+    #[test]
+    fn un_depot_qui_n_autorise_que_l_ecrasement_ne_propose_que_l_ecrasement() {
+        let regles = RepoMergeRules {
+            squash: true,
+            merge: false,
+            rebase: false,
+            delete_branch_on_merge: true,
+        };
+        let app = app_fenetre_ouverte(pr_avec_regles(1, regles));
+        let fenetre = app.merge.as_ref().expect("la fenêtre doit être ouverte");
+        assert_eq!(fenetre.methods, vec![MergeMethod::Squash]);
+    }
+
+    #[test]
+    fn un_depot_qui_autorise_tout_propose_tout_avec_la_methode_preferee() {
+        // Construction en une fois : clippy refuse la réaffectation d'un
+        // champ juste après `default()`.
+        let reglages = Config {
+            preferred_merge_method: MergeMethod::Rebase,
+            ..Config::default()
+        };
+        let mut app = App::new(reglages);
+        let generation = match &app.start()[0] {
+            Command::FetchList { generation, .. } => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        app.handle(Event::ListLoaded {
+            generation,
+            result: Ok(page(vec![pr_avec_regles(1, tout_autorise())])),
+        });
+        app.handle(Event::Key(Key::Char('m')));
+
+        let fenetre = app.merge.as_ref().expect("la fenêtre doit être ouverte");
+        assert_eq!(
+            fenetre.methods,
+            vec![MergeMethod::Squash, MergeMethod::Rebase, MergeMethod::Merge]
+        );
+        assert_eq!(fenetre.method(), Some(MergeMethod::Rebase));
+    }
+
+    #[test]
+    fn une_methode_preferee_non_autorisee_retombe_sur_la_premiere() {
+        // Réglages par défaut : la méthode préférée est l'écrasement.
+        let regles = RepoMergeRules {
+            squash: false,
+            merge: true,
+            rebase: true,
+            delete_branch_on_merge: true,
+        };
+        let app = app_fenetre_ouverte(pr_avec_regles(1, regles));
+        let fenetre = app.merge.as_ref().expect("la fenêtre doit être ouverte");
+        assert_eq!(fenetre.method(), Some(MergeMethod::Rebase));
+    }
+
+    #[test]
+    fn un_brouillon_n_ouvre_pas_la_fenetre_et_dit_pourquoi() {
+        let brouillon = PrSummary {
+            is_draft: true,
+            ..pr(1)
+        };
+        let app = app_fenetre_ouverte(brouillon);
+        assert!(app.merge.is_none());
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("Pull request en brouillon, elle doit être publiée.")
+        );
+    }
+
+    #[test]
+    fn un_conflit_n_ouvre_pas_la_fenetre_et_dit_pourquoi() {
+        let en_conflit = PrSummary {
+            mergeable: MergeableState::Conflicting,
+            ..pr(1)
+        };
+        let app = app_fenetre_ouverte(en_conflit);
+        assert!(app.merge.is_none());
+        assert_eq!(app.notice.as_deref(), Some("Conflits à résoudre."));
+    }
+
+    #[test]
+    fn un_etat_de_fusion_inconnu_demande_de_patienter() {
+        let inconnu = PrSummary {
+            mergeable: MergeableState::Unknown,
+            ..pr(1)
+        };
+        let app = app_fenetre_ouverte(inconnu);
+        assert!(app.merge.is_none());
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("État de fusion en cours de calcul, réessaie dans un instant.")
+        );
+    }
+
+    #[test]
+    fn un_depot_sans_methode_autorisee_n_ouvre_pas_la_fenetre() {
+        let regles = RepoMergeRules {
+            squash: false,
+            merge: false,
+            rebase: false,
+            delete_branch_on_merge: false,
+        };
+        let app = app_fenetre_ouverte(pr_avec_regles(1, regles));
+        assert!(app.merge.is_none());
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("Aucune méthode de fusion autorisée sur ce dépôt.")
+        );
+    }
+
+    #[test]
+    fn echap_ferme_la_fenetre_sans_aucun_appel() {
+        let mut app = app_fenetre_ouverte(pr_avec_regles(1, tout_autorise()));
+        let commandes = app.handle(Event::Key(Key::Esc));
+        assert!(app.merge.is_none());
+        assert!(commandes.is_empty(), "{commandes:?}");
+    }
+
+    #[test]
+    fn les_fleches_changent_de_methode_sans_boucler() {
+        let mut app = app_fenetre_ouverte(pr_avec_regles(1, tout_autorise()));
+        // Départ sur l'écrasement, méthode préférée par défaut.
+        app.handle(Event::Key(Key::Up));
+        assert_eq!(methode_choisie(&app), MergeMethod::Squash);
+
+        app.handle(Event::Key(Key::Down));
+        assert_eq!(methode_choisie(&app), MergeMethod::Rebase);
+        app.handle(Event::Key(Key::Down));
+        assert_eq!(methode_choisie(&app), MergeMethod::Merge);
+        app.handle(Event::Key(Key::Down));
+        assert_eq!(methode_choisie(&app), MergeMethod::Merge);
+    }
+
+    /// Méthode sous le curseur de la fenêtre ouverte.
+    fn methode_choisie(app: &App) -> MergeMethod {
+        app.merge
+            .as_ref()
+            .expect("la fenêtre doit être ouverte")
+            .method()
+            .expect("une méthode doit être sélectionnée")
+    }
+
+    #[test]
+    fn la_fenetre_capte_les_touches_de_l_application() {
+        let mut app = app_fenetre_ouverte(pr_avec_regles(1, tout_autorise()));
+        for touche in [Key::Char('q'), Key::Char('r'), Key::Char('o'), Key::Right] {
+            let commandes = app.handle(Event::Key(touche));
+            assert!(commandes.is_empty(), "{touche:?} a produit {commandes:?}");
+        }
+        assert!(!app.should_quit);
+        assert!(app.merge.is_some());
+        assert_eq!(app.view, View::List);
+    }
+
+    #[test]
+    fn ctrl_c_quitte_meme_fenetre_ouverte() {
+        let mut app = app_fenetre_ouverte(pr_avec_regles(1, tout_autorise()));
+        let commandes = app.handle(Event::Key(Key::CtrlC));
+        assert!(app.should_quit);
+        assert_eq!(commandes, vec![Command::Quit]);
+    }
+
+    #[test]
+    fn un_tick_ne_rafraichit_pas_tant_que_la_fenetre_est_ouverte() {
+        let mut app = app_fenetre_ouverte(pr_avec_regles(1, tout_autorise()));
+        let commandes = app.handle(Event::Tick);
+        assert!(commandes.is_empty(), "{commandes:?}");
+    }
+
+    #[test]
+    fn un_motif_de_refus_s_efface_a_la_touche_suivante() {
+        let brouillon = PrSummary {
+            is_draft: true,
+            ..pr(1)
+        };
+        let mut app = app_fenetre_ouverte(brouillon);
+        assert!(app.notice.is_some());
+        app.handle(Event::Key(Key::Down));
+        assert!(app.notice.is_none());
+    }
+
+    #[test]
+    fn un_motif_de_refus_s_affiche_dans_la_barre_d_etat() {
+        let brouillon = PrSummary {
+            is_draft: true,
+            ..pr(1)
+        };
+        let app = app_fenetre_ouverte(brouillon);
+        assert!(
+            app.status_line(CONFORTABLE)
+                .contains("Pull request en brouillon, elle doit être publiée."),
+            "{}",
+            app.status_line(CONFORTABLE)
+        );
+    }
+
+    #[test]
+    fn m_sur_la_pr_ouverte_en_detail_vise_cette_pr() {
+        let mut app = app_garnie(vec![pr_de("moi/a", 1), pr_de("moi/b", 2)]);
+        app.handle(Event::Key(Key::Down));
+        app.handle(Event::Key(Key::Right));
+        app.handle(Event::Key(Key::Char('m')));
+        let fenetre = app.merge.as_ref().expect("la fenêtre doit être ouverte");
+        assert_eq!(fenetre.key.repo, "moi/b");
+        assert_eq!(fenetre.key.number, 2);
     }
 
     #[test]
