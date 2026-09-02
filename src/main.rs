@@ -172,6 +172,22 @@ fn execute_command(
                 });
             });
         }
+        Command::FetchDetail {
+            generation,
+            summary,
+        } => {
+            let envoi = envoi.clone();
+            let client = client.clone();
+            let cle = summary.key.clone();
+            tokio::spawn(async move {
+                let resultat = client.fetch_detail(&summary).await;
+                let _ = envoi.send(Event::DetailLoaded {
+                    generation,
+                    key: cle,
+                    result: resultat,
+                });
+            });
+        }
     }
     false
 }

@@ -4,9 +4,9 @@
 //! ne touche au terminal. `ui` reçoit des chaînes prêtes et des tons, et
 //! n'ajoute que la mise en page et la couleur.
 
-use crate::app::App;
+use crate::app::{App, View};
 use crate::filter::Filter;
-use crate::model::{ChecksState, MergeableState, PrSummary, ReviewState};
+use crate::model::{ChecksState, MergeableState, PrDetail, PrSummary, ReviewState};
 
 /// Couleur logique d'un élément. `ui` la traduit en couleur de terminal ;
 /// le sens — vert pour « ça passe » — est décidé ici.
@@ -211,11 +211,209 @@ fn glyphe_relecture(etat: ReviewState) -> Glyph {
     }
 }
 
+/// Une ligne de la vue détail, prête à dessiner. `tone` absent : couleur par
+/// défaut du terminal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetailLine {
+    pub text: String,
+    pub tone: Option<Tone>,
+}
+
+impl DetailLine {
+    fn simple(texte: impl Into<String>) -> Self {
+        Self {
+            text: texte.into(),
+            tone: None,
+        }
+    }
+
+    fn teintee(texte: impl Into<String>, ton: Tone) -> Self {
+        Self {
+            text: texte.into(),
+            tone: Some(ton),
+        }
+    }
+}
+
+const CHARGEMENT_DETAIL: &str = "Chargement du détail…";
+const SANS_DESCRIPTION: &str = "(aucune description)";
+
+impl App {
+    /// Nombre de lignes du détail. La largeur ne change que leur longueur,
+    /// jamais leur nombre : le défilement peut donc se borner sans elle.
+    pub(crate) fn detail_line_count(&self) -> usize {
+        self.detail_lines(u16::MAX).len()
+    }
+
+    /// Compose la vue détail : une seule zone qui défile, pas un ensemble de
+    /// panneaux. Tant que la requête n'a pas répondu, l'en-tête vient du
+    /// résumé déjà en mémoire et le reste annonce le chargement.
+    pub fn detail_lines(&self, width: u16) -> Vec<DetailLine> {
+        let View::Detail { key, .. } = &self.view else {
+            return Vec::new();
+        };
+        let Some(resume) = self.prs.iter().find(|pr| &pr.key == key) else {
+            return Vec::new();
+        };
+
+        let mut lignes = vec![
+            DetailLine::simple(format!(
+                "{}  #{}  {}",
+                resume.key.repo, resume.key.number, resume.title
+            )),
+            DetailLine::simple(format!("par {}", resume.author)),
+        ];
+
+        match self.details.get(key) {
+            None => lignes.push(DetailLine::simple(CHARGEMENT_DETAIL)),
+            Some(cache) => {
+                lignes.extend(corps_du_detail(
+                    &cache.detail,
+                    &cache.loaded_at.format("%H:%M").to_string(),
+                ));
+            }
+        }
+
+        // La troncature est faite en dernier, sur toutes les lignes à la fois :
+        // aucune n'a le droit de dépasser la zone.
+        let largeur = width as usize;
+        lignes
+            .into_iter()
+            .map(|ligne| DetailLine {
+                text: tronquer(&ligne.text, largeur),
+                tone: ligne.tone,
+            })
+            .collect()
+    }
+}
+
+/// Corps du détail, dans l'ordre de la spec : branches, états en clair,
+/// description, vérifications, échanges, fichiers.
+fn corps_du_detail(detail: &PrDetail, heure: &str) -> Vec<DetailLine> {
+    let mut lignes = vec![
+        DetailLine::simple(format!("de {} vers {}", detail.head_ref, detail.base_ref)),
+        DetailLine::teintee(
+            libelle_verifications(detail.summary.checks),
+            glyphe_verifications(detail.summary.checks).tone,
+        ),
+        DetailLine::teintee(
+            libelle_relecture(detail.summary.review),
+            glyphe_relecture(detail.summary.review).tone,
+        ),
+        DetailLine::simple(libelle_fusion(detail.summary.mergeable)),
+        DetailLine::simple(String::new()),
+    ];
+
+    if detail.body.trim().is_empty() {
+        lignes.push(DetailLine::simple(SANS_DESCRIPTION));
+    } else {
+        lignes.extend(detail.body.lines().map(DetailLine::simple));
+    }
+    lignes.push(DetailLine::simple(String::new()));
+
+    lignes.push(DetailLine::simple(format!(
+        "Vérifications ({})",
+        detail.checks.len()
+    )));
+    for verification in &detail.checks {
+        let glyphe = glyphe_verifications(verification.state);
+        lignes.push(DetailLine::teintee(
+            format!("  {} {}", glyphe.symbol, verification.name),
+            glyphe.tone,
+        ));
+    }
+    lignes.push(DetailLine::simple(String::new()));
+
+    lignes.push(DetailLine::simple("Relectures et commentaires"));
+    lignes.extend(echanges(detail));
+    lignes.push(DetailLine::simple(String::new()));
+
+    lignes.push(DetailLine::simple(format!(
+        "Fichiers modifiés ({}) · +{} -{}",
+        detail.files.len(),
+        detail.additions,
+        detail.deletions
+    )));
+    for fichier in &detail.files {
+        lignes.push(DetailLine::simple(format!(
+            "  {}  +{} -{}",
+            fichier.path, fichier.additions, fichier.deletions
+        )));
+    }
+
+    lignes.push(DetailLine::simple(String::new()));
+    lignes.push(DetailLine::teintee(
+        format!("Détail chargé à {heure}"),
+        Tone::Gris,
+    ));
+    lignes
+}
+
+/// Relectures et commentaires fondus dans un seul fil chronologique : c'est
+/// l'ordre dans lequel la conversation a eu lieu.
+fn echanges(detail: &PrDetail) -> Vec<DetailLine> {
+    let mut fil: Vec<(chrono::DateTime<chrono::Utc>, String)> = Vec::new();
+    for relecture in &detail.reviews {
+        fil.push((
+            relecture.submitted_at,
+            format!(
+                "  {} · {} · {}",
+                relecture.author,
+                libelle_relecture(relecture.state),
+                relecture.body.replace('\n', " ")
+            ),
+        ));
+    }
+    for commentaire in &detail.comments {
+        fil.push((
+            commentaire.created_at,
+            format!(
+                "  {} · {}",
+                commentaire.author,
+                commentaire.body.replace('\n', " ")
+            ),
+        ));
+    }
+    fil.sort_by_key(|(instant, _)| *instant);
+    fil.into_iter()
+        .map(|(_, texte)| DetailLine::simple(texte))
+        .collect()
+}
+
+fn libelle_verifications(etat: ChecksState) -> &'static str {
+    match etat {
+        ChecksState::Success => "toutes les vérifications passent",
+        ChecksState::Failure => "au moins une vérification échoue",
+        ChecksState::Pending => "vérifications en cours",
+        ChecksState::None => "aucune vérification",
+    }
+}
+
+fn libelle_relecture(etat: ReviewState) -> &'static str {
+    match etat {
+        ReviewState::Approved => "approuvée",
+        ReviewState::ChangesRequested => "changements demandés",
+        ReviewState::ReviewRequired => "relecture attendue",
+        ReviewState::None => "rien à signaler",
+    }
+}
+
+fn libelle_fusion(etat: MergeableState) -> &'static str {
+    match etat {
+        MergeableState::Mergeable => "fusion possible",
+        MergeableState::Conflicting => "conflits à résoudre",
+        // Une attente, pas un blocage : GitHub calcule ce champ à la demande.
+        MergeableState::Unknown => "état de fusion en cours de calcul",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use crate::app::tests::detail;
     use crate::app::tests::{app_garnie, pr, pr_de};
+    use crate::app::{Command, Event, Key, View};
     use crate::config::Config;
 
     /// Largeur confortable : aucun titre n'y est tronqué.
@@ -225,6 +423,108 @@ mod tests {
         match app.list_render(largeur) {
             ListRender::Rows(lignes) => lignes,
             autre => panic!("rendu inattendu : {autre:?}"),
+        }
+    }
+
+    /// Détail ouvert sur la PR donnée, réponse livrée.
+    fn app_en_detail(numero: u32) -> crate::app::App {
+        let mut app = app_garnie(vec![pr(numero)]);
+        let generation = match &app.handle(Event::Key(Key::Right))[..] {
+            [Command::FetchDetail { generation, .. }] => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        app.handle(Event::DetailLoaded {
+            generation,
+            key: pr(numero).key,
+            result: Ok(detail(numero)),
+        });
+        app
+    }
+
+    fn textes(app: &crate::app::App) -> Vec<String> {
+        app.detail_lines(LARGE)
+            .into_iter()
+            .map(|ligne| ligne.text)
+            .collect()
+    }
+
+    #[test]
+    fn l_entete_est_affiche_avant_la_reponse_et_le_reste_indique_le_chargement() {
+        let mut app = app_garnie(vec![pr(142)]);
+        app.handle(Event::Key(Key::Right));
+        assert!(matches!(app.view, View::Detail { .. }));
+
+        let textes = textes(&app);
+        assert!(
+            textes[0].contains("moi/depot") && textes[0].contains("#142"),
+            "l'en-tête vient de PrSummary, déjà en mémoire : {textes:?}"
+        );
+        assert!(textes[0].contains("Titre 142"), "{textes:?}");
+        assert!(
+            textes.iter().any(|ligne| ligne.contains("Chargement")),
+            "{textes:?}"
+        );
+    }
+
+    #[test]
+    fn le_detail_donne_les_etats_en_clair() {
+        let textes = textes(&app_en_detail(1)).join("\n");
+        assert!(textes.contains("de ma-branche vers develop"), "{textes}");
+        assert!(textes.contains("moi"), "l'auteur : {textes}");
+        assert!(
+            textes.contains("toutes les vérifications passent"),
+            "les mêmes états que la liste, en clair : {textes}"
+        );
+        assert!(textes.contains("approuvée"), "{textes}");
+    }
+
+    #[test]
+    fn le_detail_liste_la_description_les_verifications_les_echanges_et_les_fichiers() {
+        let textes = textes(&app_en_detail(1)).join("\n");
+        assert!(textes.contains("Première ligne."), "{textes}");
+        assert!(textes.contains("Seconde ligne."), "{textes}");
+        assert!(
+            textes.contains("tests"),
+            "une vérification par ligne : {textes}"
+        );
+        assert!(textes.contains("collegue"), "une relecture : {textes}");
+        assert!(textes.contains("Rebasé."), "un commentaire : {textes}");
+        assert!(
+            textes.contains("src/app/mod.rs") && textes.contains("+12") && textes.contains("-3"),
+            "les fichiers et leurs compteurs : {textes}"
+        );
+    }
+
+    #[test]
+    fn les_relectures_et_les_commentaires_sont_dans_l_ordre_chronologique() {
+        let textes = textes(&app_en_detail(1)).join("\n");
+        let relecture = textes.find("collegue").expect("la relecture de 10:00");
+        let commentaire = textes.find("Rebasé.").expect("le commentaire de 11:00");
+        assert!(relecture < commentaire, "{textes}");
+    }
+
+    #[test]
+    fn le_detail_porte_l_heure_de_son_chargement() {
+        let app = app_en_detail(1);
+        let heure = app
+            .details
+            .values()
+            .next()
+            .expect("un détail en cache")
+            .loaded_at
+            .format("%H:%M")
+            .to_string();
+        assert!(
+            textes(&app).iter().any(|ligne| ligne.contains(&heure)),
+            "le détail peut être périmé : autant dire quand il a été lu"
+        );
+    }
+
+    #[test]
+    fn une_ligne_de_detail_trop_longue_est_tronquee() {
+        let app = app_en_detail(1);
+        for ligne in app.detail_lines(40) {
+            assert!(ligne.text.chars().count() <= 40, "ligne = {}", ligne.text);
         }
     }
 

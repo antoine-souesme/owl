@@ -5,12 +5,13 @@
 //! couleur, et le curseur de sélection.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, ListRender, ListRow, Tone};
+use crate::app::{App, ListRender, ListRow};
+use crate::ui::couleur;
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
     let zones = Layout::default()
@@ -69,13 +70,4 @@ fn item(ligne: ListRow) -> ListItem<'static> {
         Span::raw("  "),
         Span::styled(ligne.text, style_texte),
     ]))
-}
-
-fn couleur(ton: Tone) -> Color {
-    match ton {
-        Tone::Vert => Color::Green,
-        Tone::Rouge => Color::Red,
-        Tone::Jaune => Color::Yellow,
-        Tone::Gris => Color::DarkGray,
-    }
 }

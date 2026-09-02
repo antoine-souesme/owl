@@ -9,12 +9,14 @@ mod render;
 
 pub use render::{ListRender, ListRow, Tone};
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Local};
 
 use crate::config::Config;
 use crate::filter::{self, Filter};
 use crate::github::GithubError;
-use crate::model::{ListPage, PrKey, PrSummary, RateLimit};
+use crate::model::{ListPage, PrDetail, PrKey, PrSummary, RateLimit};
 
 /// Numéro de génération d'une demande réseau. Un résultat dont la génération
 /// est périmée est ignoré, ce qui évite qu'une réponse lente écrase une
@@ -39,7 +41,11 @@ pub enum Key {
 }
 
 /// Ce qui arrive dans la file d'événements.
+// `DetailLoaded` porte un `PrDetail` complet, nettement plus gros que les
+// autres variantes : la spec le nomme ainsi, et boîter cette variante pour
+// satisfaire clippy compliquerait chaque appelant sans bénéfice réel.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Event {
     Key(Key),
     /// Tour de minuteur de rafraîchissement.
@@ -51,6 +57,12 @@ pub enum Event {
         generation: Generation,
         result: Result<ListPage, GithubError>,
     },
+    /// Résultat d'une requête de détail.
+    DetailLoaded {
+        generation: Generation,
+        key: PrKey,
+        result: Result<PrDetail, GithubError>,
+    },
 }
 
 /// Ce que `app` demande à `main` de faire.
@@ -61,6 +73,12 @@ pub enum Command {
         /// Chaîne de recherche complète, assemblée par `filter::build_query`.
         query: String,
         page_size: u16,
+    },
+    FetchDetail {
+        generation: Generation,
+        /// Le résumé entier, et pas la seule clé : `github::fetch_detail` le
+        /// recopie dans le `PrDetail` qu'il rend.
+        summary: PrSummary,
     },
     Quit,
 }
@@ -74,10 +92,29 @@ pub struct Loading {
 }
 
 /// Aide clavier, en fin de barre d'état. Le texte est ici, pas dans `ui`.
-const AIDE: &str = "↑↓ naviguer · → détail · m fusionner · r rafraîchir · o navigateur · q quitter";
+const AIDE_LISTE: &str =
+    "↑↓ naviguer · → détail · m fusionner · r rafraîchir · o navigateur · q quitter";
+const AIDE_DETAIL: &str =
+    "↑↓ défiler · ← liste · m fusionner · r rafraîchir · o navigateur · q quitter";
 
 /// Message affiché tant qu'aucune réponse n'est arrivée.
 const ATTENTE_INITIALE: &str = "Chargement…";
+
+/// Vue affichée. Le défilement voyage avec la vue : revenir à la liste puis
+/// rouvrir un détail le remet en haut, ce qui est le comportement attendu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum View {
+    List,
+    Detail { key: PrKey, scroll: u16 },
+}
+
+/// Un détail en cache, avec l'heure de son chargement : le détail peut être
+/// périmé sans qu'on le sache, autant dire quand il a été lu.
+#[derive(Debug, Clone)]
+pub struct CachedDetail {
+    pub detail: PrDetail,
+    pub loaded_at: DateTime<Local>,
+}
 
 pub struct App {
     pub prs: Vec<PrSummary>,
@@ -97,7 +134,10 @@ pub struct App {
     pub rate_limit: Option<RateLimit>,
     pub should_quit: bool,
     pub last_refresh: Option<DateTime<Local>>,
+    pub view: View,
+    pub details: HashMap<PrKey, CachedDetail>,
     list_generation: Generation,
+    detail_generation: Generation,
     /// Filtres des réglages, traduits une seule fois.
     filters: Vec<Filter>,
     config: Config,
@@ -114,7 +154,10 @@ impl App {
             rate_limit: None,
             should_quit: false,
             last_refresh: None,
+            view: View::List,
+            details: HashMap::new(),
             list_generation: 0,
+            detail_generation: 0,
             filters: config
                 .filters
                 .iter()
@@ -168,25 +211,128 @@ impl App {
                 }
                 Vec::new()
             }
+            Event::DetailLoaded {
+                generation,
+                key,
+                result,
+            } => {
+                if generation != self.detail_generation {
+                    return Vec::new();
+                }
+                self.loading.detail = false;
+                match result {
+                    Ok(detail) => {
+                        self.details.insert(
+                            key,
+                            CachedDetail {
+                                detail,
+                                loaded_at: Local::now(),
+                            },
+                        );
+                        self.error = None;
+                    }
+                    Err(erreur) => self.error = Some(erreur.to_string()),
+                }
+                Vec::new()
+            }
         }
     }
 
     fn handle_key(&mut self, touche: Key) -> Vec<Command> {
+        // Touches communes aux deux vues, traitées avant l'aiguillage.
         match touche {
             Key::Char('q') | Key::CtrlC => {
                 self.should_quit = true;
-                vec![Command::Quit]
+                return vec![Command::Quit];
             }
-            Key::Char('r') => vec![self.fetch_list()],
-            Key::Up | Key::Char('k') => {
-                self.select_previous();
-                Vec::new()
+            Key::Char('r') => return self.refresh(),
+            _ => {}
+        }
+
+        match self.view {
+            View::List => self.handle_key_list(touche),
+            View::Detail { .. } => self.handle_key_detail(touche),
+        }
+    }
+
+    fn handle_key_list(&mut self, touche: Key) -> Vec<Command> {
+        match touche {
+            Key::Up | Key::Char('k') => self.select_previous(),
+            Key::Down | Key::Char('j') => self.select_next(),
+            Key::Right | Key::Enter => return self.open_detail(),
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn handle_key_detail(&mut self, touche: Key) -> Vec<Command> {
+        match touche {
+            Key::Up | Key::Char('k') => self.scroll_detail(-1),
+            Key::Down | Key::Char('j') => self.scroll_detail(1),
+            Key::Left | Key::Esc => self.view = View::List,
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    /// `r` rafraîchit ce qui est affiché : la liste, ou le détail ouvert.
+    /// Sur le détail, la requête part même si le cache répond déjà : c'est
+    /// justement le seul moyen de le rafraîchir.
+    fn refresh(&mut self) -> Vec<Command> {
+        match &self.view {
+            View::List => vec![self.fetch_list()],
+            View::Detail { key, .. } => {
+                let cle = key.clone();
+                match self.prs.iter().find(|pr| pr.key == cle).cloned() {
+                    Some(resume) => vec![self.fetch_detail(resume)],
+                    // La PR a disparu de la liste : rien à recharger.
+                    None => Vec::new(),
+                }
             }
-            Key::Down | Key::Char('j') => {
-                self.select_next();
-                Vec::new()
-            }
-            _ => Vec::new(),
+        }
+    }
+
+    /// Ouvre le détail de la sélection. Une PR déjà consultée pendant la
+    /// session s'affiche depuis le cache, sans nouvelle requête.
+    fn open_detail(&mut self) -> Vec<Command> {
+        let Some(resume) = self.selected_pr().cloned() else {
+            return Vec::new();
+        };
+        self.view = View::Detail {
+            key: resume.key.clone(),
+            scroll: 0,
+        };
+        if self.details.contains_key(&resume.key) {
+            return Vec::new();
+        }
+        vec![self.fetch_detail(resume)]
+    }
+
+    fn fetch_detail(&mut self, summary: PrSummary) -> Command {
+        self.detail_generation += 1;
+        self.loading.detail = true;
+        Command::FetchDetail {
+            generation: self.detail_generation,
+            summary,
+        }
+    }
+
+    /// Défilement courant de la vue détail. Zéro dans la vue liste.
+    pub fn detail_scroll(&self) -> u16 {
+        match &self.view {
+            View::Detail { scroll, .. } => *scroll,
+            View::List => 0,
+        }
+    }
+
+    /// Défile de `pas` lignes, borné au contenu. La hauteur de la zone n'est
+    /// pas connue ici : la dernière ligne reste atteignable, et le dessin ne
+    /// peut de toute façon pas défiler au-delà.
+    fn scroll_detail(&mut self, pas: i32) {
+        let maximum = self.detail_line_count().saturating_sub(1) as u16;
+        if let View::Detail { scroll, .. } = &mut self.view {
+            let vise = i64::from(*scroll) + i64::from(pas);
+            *scroll = vise.clamp(0, i64::from(maximum)) as u16;
         }
     }
 
@@ -267,7 +413,13 @@ impl App {
             }
         }
 
-        morceaux.push(AIDE.to_string());
+        morceaux.push(
+            match self.view {
+                View::List => AIDE_LISTE,
+                View::Detail { .. } => AIDE_DETAIL,
+            }
+            .to_string(),
+        );
         morceaux.join(" · ")
     }
 
@@ -286,7 +438,8 @@ pub(crate) mod tests {
     use super::*;
 
     use crate::model::{
-        ChecksState, ListPage, MergeableState, PrKey, PrSummary, RepoMergeRules, ReviewState,
+        ChangedFile, CheckRun, ChecksState, Comment, MergeableState, RepoMergeRules, Review,
+        ReviewState,
     };
 
     pub(crate) fn pr(numero: u32) -> PrSummary {
@@ -542,7 +695,7 @@ pub(crate) mod tests {
     #[test]
     fn la_barre_d_etat_au_demarrage_n_annonce_l_attente_qu_une_fois() {
         let (app, _) = app_demarree();
-        assert_eq!(app.status_line(), format!("Chargement… · {AIDE}"));
+        assert_eq!(app.status_line(), format!("Chargement… · {AIDE_LISTE}"));
     }
 
     #[test]
@@ -555,7 +708,7 @@ pub(crate) mod tests {
         let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
         assert_eq!(
             app.status_line(),
-            format!("2 pull requests · mis à jour à {heure} · {AIDE}")
+            format!("2 pull requests · mis à jour à {heure} · {AIDE_LISTE}")
         );
     }
 
@@ -570,7 +723,7 @@ pub(crate) mod tests {
         let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
         assert_eq!(
             app.status_line(),
-            format!("1 pull request · mis à jour à {heure} · chargement… · {AIDE}")
+            format!("1 pull request · mis à jour à {heure} · chargement… · {AIDE_LISTE}")
         );
     }
 
@@ -583,7 +736,7 @@ pub(crate) mod tests {
         });
         assert_eq!(
             app.status_line(),
-            format!("Réseau injoignable. · {AIDE}"),
+            format!("Réseau injoignable. · {AIDE_LISTE}"),
             "aucune heure : aucun rafraîchissement n'a encore réussi"
         );
     }
@@ -772,5 +925,221 @@ pub(crate) mod tests {
         let (mut app, _) = app_demarree();
         assert_eq!(app.handle(Event::Key(Key::CtrlC)), vec![Command::Quit]);
         assert!(app.should_quit);
+    }
+
+    /// Détail d'une pull request, minimal mais complet dans sa forme.
+    pub(crate) fn detail(numero: u32) -> PrDetail {
+        let resume = pr(numero);
+        PrDetail {
+            node_id: format!("PR_{numero}"),
+            body: "Première ligne.\nSeconde ligne.".to_string(),
+            head_ref: "ma-branche".to_string(),
+            base_ref: "develop".to_string(),
+            checks: vec![CheckRun {
+                name: "tests".to_string(),
+                state: ChecksState::Success,
+                url: None,
+            }],
+            reviews: vec![Review {
+                author: "collegue".to_string(),
+                state: ReviewState::Approved,
+                body: "Ça me va.".to_string(),
+                submitted_at: "2026-08-30T10:00:00Z".parse().expect("date valide"),
+            }],
+            comments: vec![Comment {
+                author: "moi".to_string(),
+                body: "Rebasé.".to_string(),
+                created_at: "2026-08-30T11:00:00Z".parse().expect("date valide"),
+            }],
+            files: vec![ChangedFile {
+                path: "src/app/mod.rs".to_string(),
+                additions: 12,
+                deletions: 3,
+            }],
+            additions: 12,
+            deletions: 3,
+            summary: resume,
+        }
+    }
+
+    /// Ouvre le détail de la sélection et rend la génération demandée.
+    fn ouvrir_detail(app: &mut App) -> Generation {
+        match &app.handle(Event::Key(Key::Right))[..] {
+            [Command::FetchDetail { generation, .. }] => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        }
+    }
+
+    #[test]
+    fn la_fleche_droite_ouvre_le_detail_et_demande_les_donnees() {
+        let mut app = app_garnie(vec![pr(1), pr(2)]);
+        app.handle(Event::Key(Key::Down));
+        let commandes = app.handle(Event::Key(Key::Right));
+        assert!(matches!(app.view, View::Detail { .. }));
+        match &commandes[..] {
+            [Command::FetchDetail { summary, .. }] => assert_eq!(summary.key.number, 2),
+            autre => panic!("commande inattendue : {autre:?}"),
+        }
+        assert!(app.loading.detail);
+    }
+
+    #[test]
+    fn entree_ouvre_aussi_le_detail() {
+        let mut app = app_garnie(vec![pr(1)]);
+        app.handle(Event::Key(Key::Enter));
+        assert!(matches!(app.view, View::Detail { .. }));
+    }
+
+    #[test]
+    fn ouvrir_une_pr_deja_en_cache_n_emet_aucune_commande() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let generation = ouvrir_detail(&mut app);
+        app.handle(Event::DetailLoaded {
+            generation,
+            key: pr(1).key,
+            result: Ok(detail(1)),
+        });
+        app.handle(Event::Key(Key::Left));
+
+        let commandes = app.handle(Event::Key(Key::Right));
+        assert!(
+            commandes.is_empty(),
+            "le cache de la session évite la requête : {commandes:?}"
+        );
+        assert!(!app.loading.detail);
+    }
+
+    #[test]
+    fn la_fleche_gauche_et_echap_reviennent_a_la_liste() {
+        let mut app = app_garnie(vec![pr(1)]);
+        ouvrir_detail(&mut app);
+        assert!(app.handle(Event::Key(Key::Left)).is_empty());
+        assert!(matches!(app.view, View::List));
+
+        ouvrir_detail(&mut app);
+        app.handle(Event::Key(Key::Esc));
+        assert!(matches!(app.view, View::List));
+    }
+
+    #[test]
+    fn une_liste_vide_n_ouvre_pas_de_detail() {
+        let mut app = app_garnie(vec![]);
+        assert!(app.handle(Event::Key(Key::Right)).is_empty());
+        assert!(matches!(app.view, View::List));
+    }
+
+    #[test]
+    fn r_en_vue_detail_recharge_le_detail_et_pas_la_liste() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let generation = ouvrir_detail(&mut app);
+        app.handle(Event::DetailLoaded {
+            generation,
+            key: pr(1).key,
+            result: Ok(detail(1)),
+        });
+
+        match &app.handle(Event::Key(Key::Char('r')))[..] {
+            [Command::FetchDetail {
+                generation: neuve, ..
+            }] => {
+                assert!(*neuve > generation, "une nouvelle génération s'ouvre")
+            }
+            autre => panic!("commande inattendue : {autre:?}"),
+        }
+    }
+
+    #[test]
+    fn les_fleches_font_defiler_le_detail_sans_deborder() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let generation = ouvrir_detail(&mut app);
+        app.handle(Event::DetailLoaded {
+            generation,
+            key: pr(1).key,
+            result: Ok(detail(1)),
+        });
+        assert_eq!(app.detail_scroll(), 0);
+
+        // En haut, la flèche haut ne fait rien.
+        app.handle(Event::Key(Key::Up));
+        assert_eq!(app.detail_scroll(), 0);
+
+        app.handle(Event::Key(Key::Down));
+        assert_eq!(app.detail_scroll(), 1);
+        app.handle(Event::Key(Key::Up));
+        assert_eq!(app.detail_scroll(), 0);
+
+        // Le bas de la zone est un mur : on ne défile pas dans le vide.
+        for _ in 0..500 {
+            app.handle(Event::Key(Key::Down));
+        }
+        let dernier = app.detail_scroll() as usize;
+        assert!(dernier > 0);
+        assert!(
+            dernier < app.detail_lines(u16::MAX).len(),
+            "défilement borné au contenu"
+        );
+    }
+
+    #[test]
+    fn un_detail_perime_est_ignore() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let premiere = ouvrir_detail(&mut app);
+        // Rechargement : la réponse lente de la première arrive après.
+        app.handle(Event::Key(Key::Char('r')));
+        app.handle(Event::DetailLoaded {
+            generation: premiere,
+            key: pr(1).key,
+            result: Ok(detail(1)),
+        });
+        assert!(app.details.is_empty(), "la réponse périmée ne se range pas");
+        assert!(app.loading.detail, "la requête en cours reste en cours");
+    }
+
+    #[test]
+    fn ouvrir_un_detail_ne_perime_pas_une_requete_de_liste_en_vol() {
+        let mut app = app_garnie(vec![pr(1), pr(2)]);
+        let generation_liste = match &app.handle(Event::Tick)[..] {
+            [Command::FetchList { generation, .. }] => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        ouvrir_detail(&mut app);
+
+        app.handle(Event::ListLoaded {
+            generation: generation_liste,
+            result: Ok(page(vec![pr(1), pr(2), pr(3)])),
+        });
+        assert_eq!(app.prs.len(), 3, "le résultat de liste doit être accepté");
+        assert!(!app.loading.list);
+    }
+
+    #[test]
+    fn un_rafraichissement_de_liste_ne_vide_pas_le_cache_des_details() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let generation = ouvrir_detail(&mut app);
+        app.handle(Event::DetailLoaded {
+            generation,
+            key: pr(1).key,
+            result: Ok(detail(1)),
+        });
+        app.handle(Event::Key(Key::Left));
+
+        rafraichir(&mut app, vec![pr(1)]);
+        assert!(
+            app.details.contains_key(&pr(1).key),
+            "le compromis est assumé : le détail reste en cache jusqu'à r"
+        );
+    }
+
+    #[test]
+    fn une_erreur_de_detail_est_reprise_telle_quelle() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let generation = ouvrir_detail(&mut app);
+        app.handle(Event::DetailLoaded {
+            generation,
+            key: pr(1).key,
+            result: Err(GithubError::Transport),
+        });
+        assert_eq!(app.error.as_deref(), Some("Réseau injoignable."));
+        assert!(!app.loading.detail);
     }
 }
