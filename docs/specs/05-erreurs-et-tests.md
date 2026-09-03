@@ -56,6 +56,11 @@ réinitialisation, et la barre d'état l'annonce : « limite d'appels atteinte,
 reprise à 14 h 32 ». La touche `r` est refusée pendant cette suspension, avec le même
 message. `owl` ne réessaie jamais en boucle une requête refusée pour cause de limite.
 
+Quand GitHub refuse un solde de limite primaire épuisé sans que l'en-tête
+d'heure de réinitialisation soit exploitable, `owl` attend une minute avant de
+reprendre. L'attente est arbitraire, mais l'interdiction de réessayer en
+boucle, elle, ne l'est pas.
+
 Aux réglages par défaut — une requête de liste par minute — la consommation reste
 très en dessous des quotas de GitHub. La suspension est un garde-fou, pas un cas
 courant.

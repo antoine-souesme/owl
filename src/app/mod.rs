@@ -13,7 +13,7 @@ use render::tronquer;
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Duration, Local};
 
 use crate::config::Config;
 use crate::filter::{self, Filter};
@@ -131,6 +131,11 @@ const REFUS_CONFLITS: &str = "Conflits à résoudre.";
 const REFUS_ETAT_INCONNU: &str = "État de fusion en cours de calcul, réessaie dans un instant.";
 const REFUS_AUCUNE_METHODE: &str = "Aucune méthode de fusion autorisée sur ce dépôt.";
 
+/// Attente imposée quand GitHub refuse pour limite d'appels sans donner
+/// d'heure de reprise — le cas des limites secondaires sans `retry-after`.
+/// Une minute suffit à casser la boucle de réessais, que la spec interdit.
+const REPRISE_INCONNUE: i64 = 60;
+
 /// Vue affichée. Le défilement voyage avec la vue : revenir à la liste puis
 /// rouvrir un détail le remet en haut, ce qui est le comportement attendu.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,10 +194,12 @@ pub struct App {
     /// Dernière erreur reçue, reprise telle quelle de GitHub. Effacée par la
     /// première réponse réussie.
     pub error: Option<String>,
-    /// Solde d'appels rapporté par la dernière requête réussie. La suspension
-    /// du rafraîchissement qu'il déclenche appartient à `05-erreurs-et-tests.md`.
-    #[allow(dead_code)]
+    /// Solde d'appels rapporté par la dernière requête réussie.
     pub rate_limit: Option<RateLimit>,
+    /// Heure de reprise quand la limite d'appels est atteinte. Tant qu'elle
+    /// n'est pas passée, le rafraîchissement automatique est suspendu et `r`
+    /// est refusée. Elle s'éteint d'elle-même : rien n'a à la remettre à zéro.
+    suspended_until: Option<DateTime<Local>>,
     pub should_quit: bool,
     pub last_refresh: Option<DateTime<Local>>,
     pub view: View,
@@ -220,6 +227,7 @@ impl App {
             loading: Loading::default(),
             error: None,
             rate_limit: None,
+            suspended_until: None,
             should_quit: false,
             last_refresh: None,
             view: View::List,
@@ -258,11 +266,12 @@ impl App {
             // l'écran, et le message en cours n'est pas effacé — un
             // redimensionnement n'est pas un appui sur une touche.
             Event::Resize => Vec::new(),
-            // Une requête de liste déjà en vol suffit, et la liste ne change
-            // pas sous une fenêtre de fusion ouverte : le tour est perdu, le
-            // suivant s'en chargera.
+            // Une requête de liste déjà en vol suffit, la liste ne change pas
+            // sous une fenêtre de fusion ouverte, et une limite d'appels
+            // atteinte interdit de réessayer : le tour est perdu, le suivant
+            // s'en chargera.
             Event::Tick => {
-                if self.loading.list || self.merge.is_some() {
+                if self.loading.list || self.merge.is_some() || self.suspension().is_some() {
                     Vec::new()
                 } else {
                     vec![self.fetch_list()]
@@ -280,9 +289,10 @@ impl App {
                         self.rate_limit = page.rate_limit;
                         self.last_refresh = Some(Local::now());
                         self.error = None;
+                        self.note_rate_limit();
                     }
                     // Message de GitHub repris tel quel, et liste conservée.
-                    Err(erreur) => self.error = Some(erreur.to_string()),
+                    Err(erreur) => self.note_error(erreur),
                 }
                 Vec::new()
             }
@@ -306,7 +316,7 @@ impl App {
                         );
                         self.error = None;
                     }
-                    Err(erreur) => self.error = Some(erreur.to_string()),
+                    Err(erreur) => self.note_error(erreur),
                 }
                 self.borner_le_defilement();
                 Vec::new()
@@ -474,6 +484,12 @@ impl App {
     /// Sur le détail, la requête part même si le cache répond déjà : c'est
     /// justement le seul moyen de le rafraîchir.
     fn refresh(&mut self) -> Vec<Command> {
+        // Suspension en cours : la touche est refusée. Aucun message n'est
+        // posé ici, la barre d'état porte déjà l'annonce et son heure de
+        // reprise — l'écrire deux fois sur la même ligne n'apprend rien.
+        if self.suspension().is_some() {
+            return Vec::new();
+        }
         match &self.view {
             View::List => vec![self.fetch_list()],
             View::Detail { key, .. } => {
@@ -667,6 +683,36 @@ impl App {
         self.selected_key = self.selected_pr().map(|pr| pr.key.clone());
     }
 
+    /// Suspend le rafraîchissement quand le solde rapporté est épuisé.
+    fn note_rate_limit(&mut self) {
+        if let Some(limite) = &self.rate_limit {
+            if limite.remaining == 0 {
+                self.suspended_until = Some(limite.reset_at.with_timezone(&Local));
+            }
+        }
+    }
+
+    /// Retient une erreur de requête. Un refus pour limite d'appels ne laisse
+    /// pas de message d'erreur : il suspend le rafraîchissement, et la barre
+    /// d'état l'annonce avec l'heure de reprise.
+    fn note_error(&mut self, erreur: GithubError) {
+        match erreur {
+            GithubError::RateLimited { reset_at } => {
+                let reprise = reset_at
+                    .map(|heure| heure.with_timezone(&Local))
+                    .unwrap_or_else(|| Local::now() + Duration::seconds(REPRISE_INCONNUE));
+                self.suspended_until = Some(reprise);
+            }
+            autre => self.error = Some(autre.to_string()),
+        }
+    }
+
+    /// Heure de reprise si la suspension court encore. Rend `None` dès que
+    /// l'heure est passée : la suspension s'éteint sans que rien la lève.
+    fn suspension(&self) -> Option<DateTime<Local>> {
+        self.suspended_until.filter(|heure| *heure > Local::now())
+    }
+
     /// Ouvre une nouvelle génération et demande la liste.
     fn fetch_list(&mut self) -> Command {
         self.list_generation += 1;
@@ -703,7 +749,11 @@ impl App {
 
         let mut morceaux: Vec<(u8, String)> = Vec::new();
 
-        if self.last_refresh.is_none() && self.error.is_none() && self.notice.is_none() {
+        if self.last_refresh.is_none()
+            && self.error.is_none()
+            && self.notice.is_none()
+            && self.suspension().is_none()
+        {
             // Rien n'est encore arrivé : l'attente est le message principal.
             morceaux.push((ERREUR, ATTENTE_INITIALE.to_string()));
         } else {
@@ -725,6 +775,12 @@ impl App {
         // même rang que l'erreur : il ne doit pas être sacrifié à la place.
         if let Some(message) = &self.notice {
             morceaux.push((ERREUR, message.clone()));
+        }
+
+        // Suspension pour limite d'appels : au même rang que l'erreur, elle
+        // dit pourquoi la liste ne se rafraîchit plus.
+        if let Some(reprise) = self.suspension() {
+            morceaux.push((ERREUR, message_de_suspension(reprise)));
         }
 
         morceaux.push((
@@ -771,6 +827,14 @@ fn assembler(morceaux: &[(u8, String)]) -> String {
         .map(|(_, texte)| texte.as_str())
         .collect::<Vec<_>>()
         .join(" · ")
+}
+
+/// Annonce de suspension pour limite d'appels, avec son heure de reprise.
+fn message_de_suspension(reprise: DateTime<Local>) -> String {
+    format!(
+        "limite d'appels atteinte, reprise à {}",
+        reprise.format("%H h %M")
+    )
 }
 
 #[cfg(test)]
@@ -2164,5 +2228,221 @@ pub(crate) mod tests {
         assert!(commandes.is_empty(), "commandes = {commandes:?}");
         assert!(matches!(app.view, View::List), "aucun changement de vue");
         assert!(app.error.is_none(), "et aucun message d'erreur");
+    }
+
+    /// Réponse de liste portant un solde d'appels, pour les tests de suspension.
+    pub(crate) fn page_avec_solde(
+        pull_requests: Vec<PrSummary>,
+        remaining: u32,
+        reset_at: chrono::DateTime<chrono::Utc>,
+    ) -> ListPage {
+        ListPage {
+            pull_requests,
+            rate_limit: Some(RateLimit {
+                remaining,
+                reset_at,
+            }),
+        }
+    }
+
+    /// Livre une réponse de liste donnée en respectant la génération en vol.
+    fn livrer(app: &mut App, generation: Generation, resultat: Result<ListPage, GithubError>) {
+        app.handle(Event::ListLoaded {
+            generation,
+            result: resultat,
+        });
+    }
+
+    #[test]
+    fn un_solde_epuise_suspend_le_minuteur() {
+        let (mut app, generation) = app_demarree();
+        let reprise = chrono::Utc::now() + chrono::Duration::minutes(30);
+        livrer(
+            &mut app,
+            generation,
+            Ok(page_avec_solde(vec![pr(1)], 0, reprise)),
+        );
+        assert!(
+            app.handle(Event::Tick).is_empty(),
+            "le minuteur ne doit plus demander de liste"
+        );
+    }
+
+    #[test]
+    fn un_solde_non_nul_ne_suspend_rien() {
+        let (mut app, generation) = app_demarree();
+        let reprise = chrono::Utc::now() + chrono::Duration::minutes(30);
+        livrer(
+            &mut app,
+            generation,
+            Ok(page_avec_solde(vec![pr(1)], 12, reprise)),
+        );
+        assert!(
+            !app.handle(Event::Tick).is_empty(),
+            "un solde restant ne doit rien suspendre"
+        );
+    }
+
+    #[test]
+    fn la_barre_d_etat_annonce_l_heure_de_reprise() {
+        let (mut app, generation) = app_demarree();
+        let reprise = chrono::Utc::now() + chrono::Duration::minutes(30);
+        livrer(
+            &mut app,
+            generation,
+            Ok(page_avec_solde(vec![pr(1)], 0, reprise)),
+        );
+        let attendu = format!(
+            "limite d'appels atteinte, reprise à {}",
+            reprise.with_timezone(&Local).format("%H h %M")
+        );
+        let ligne = app.status_line(CONFORTABLE);
+        assert!(ligne.contains(&attendu), "ligne = {ligne}");
+    }
+
+    #[test]
+    fn la_touche_r_est_refusee_pendant_la_suspension() {
+        let (mut app, generation) = app_demarree();
+        let reprise = chrono::Utc::now() + chrono::Duration::minutes(30);
+        livrer(
+            &mut app,
+            generation,
+            Ok(page_avec_solde(vec![pr(1)], 0, reprise)),
+        );
+        assert!(
+            app.handle(Event::Key(Key::Char('r'))).is_empty(),
+            "r doit être refusée pendant la suspension"
+        );
+        assert_eq!(app.prs.len(), 1, "la liste reste affichée");
+    }
+
+    #[test]
+    fn la_reprise_passee_rend_la_main_au_minuteur() {
+        let (mut app, generation) = app_demarree();
+        let reprise = chrono::Utc::now() - chrono::Duration::minutes(1);
+        livrer(
+            &mut app,
+            generation,
+            Ok(page_avec_solde(vec![pr(1)], 0, reprise)),
+        );
+        assert!(
+            !app.handle(Event::Tick).is_empty(),
+            "l'heure de reprise passée, le rafraîchissement repart"
+        );
+        let ligne = app.status_line(CONFORTABLE);
+        assert!(
+            !ligne.contains("limite d'appels"),
+            "l'annonce disparaît avec la suspension : {ligne}"
+        );
+    }
+
+    #[test]
+    fn un_refus_pour_limite_suspend_au_lieu_d_afficher_l_erreur() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
+            Command::FetchList { generation, .. } => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        let reprise = chrono::Utc::now() + chrono::Duration::minutes(15);
+        livrer(
+            &mut app,
+            generation,
+            Err(GithubError::RateLimited {
+                reset_at: Some(reprise),
+            }),
+        );
+        assert!(app.error.is_none(), "erreur = {:?}", app.error);
+        assert_eq!(app.prs.len(), 1, "la liste précédente reste visible");
+        assert!(app.handle(Event::Tick).is_empty());
+        let ligne = app.status_line(CONFORTABLE);
+        assert!(
+            ligne.contains("limite d'appels atteinte"),
+            "ligne = {ligne}"
+        );
+    }
+
+    #[test]
+    fn un_refus_pour_limite_sans_heure_suspend_quand_meme() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
+            Command::FetchList { generation, .. } => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        livrer(
+            &mut app,
+            generation,
+            Err(GithubError::RateLimited { reset_at: None }),
+        );
+        assert!(
+            app.handle(Event::Tick).is_empty(),
+            "owl ne doit jamais réessayer en boucle une requête refusée pour limite"
+        );
+    }
+
+    #[test]
+    fn une_panne_reseau_laisse_la_liste_affichee() {
+        let mut app = app_garnie(vec![pr(1), pr(2)]);
+        let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
+            Command::FetchList { generation, .. } => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        app.handle(Event::ListLoaded {
+            generation,
+            result: Err(GithubError::Transport),
+        });
+        assert_eq!(app.prs.len(), 2, "la liste précédente reste visible");
+        assert!(
+            !app.should_quit,
+            "une panne réseau n'arrête pas le programme"
+        );
+        assert_eq!(app.error.as_deref(), Some("Réseau injoignable."));
+        assert!(
+            app.status_line(CONFORTABLE).contains("Réseau injoignable."),
+            "l'erreur s'affiche dans la barre d'état"
+        );
+        assert!(
+            app.last_refresh.is_some(),
+            "l'heure du dernier succès reste, elle mesure l'ancienneté"
+        );
+    }
+
+    #[test]
+    fn le_prochain_succes_efface_l_erreur() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let echec = match &app.handle(Event::Key(Key::Char('r')))[0] {
+            Command::FetchList { generation, .. } => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        app.handle(Event::ListLoaded {
+            generation: echec,
+            result: Err(GithubError::Transport),
+        });
+        assert!(app.error.is_some());
+
+        let succes = match &app.handle(Event::Key(Key::Char('r')))[0] {
+            Command::FetchList { generation, .. } => *generation,
+            autre => panic!("commande inattendue : {autre:?}"),
+        };
+        app.handle(Event::ListLoaded {
+            generation: succes,
+            result: Ok(page(vec![pr(1)])),
+        });
+        assert!(app.error.is_none(), "erreur = {:?}", app.error);
+    }
+
+    #[test]
+    fn un_refus_pour_limite_sur_le_detail_suspend_au_lieu_d_afficher_l_erreur() {
+        let mut app = app_garnie(vec![pr(1)]);
+        let generation = ouvrir_detail(&mut app);
+        let reprise = chrono::Utc::now() + chrono::Duration::minutes(15);
+        app.handle(Event::DetailLoaded {
+            generation,
+            key: pr(1).key,
+            result: Err(GithubError::RateLimited {
+                reset_at: Some(reprise),
+            }),
+        });
+        assert!(app.error.is_none(), "erreur = {:?}", app.error);
+        assert!(app.handle(Event::Tick).is_empty());
     }
 }
