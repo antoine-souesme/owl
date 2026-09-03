@@ -41,8 +41,8 @@ Une fenêtre centrée, par-dessus la liste, qui capte tout le clavier.
 
 ```
 ┌─ Merge ────────────────────────────┐
-│ org/depot │ #142                   │
-│ Fix settings loading               │
+│ #142 Fix settings loading          │
+│ develop ← fix/settings             │
 │                                    │
 │ Method:                            │
 │     Create a merge commit          │
@@ -65,8 +65,15 @@ la première méthode autorisée en partant du haut. Cette mémoire vit dans
 `App::last_used_method` et ne survit pas à la session : `owl` ne réécrit jamais les
 réglages.
 
-La fenêtre reprend le code couleur de la vue liste : le dépôt en cyan, la barre
-verticale et le numéro en gris, le titre en couleur par défaut, les méthodes
+Les deux premiers rangs disent de quoi il s'agit et où ça va : le numéro puis le
+titre, et en dessous la branche visée, une flèche vers la gauche, la branche
+d'origine. Les deux noms de branche viennent du résumé de la liste, jamais d'une
+requête de détail : la fenêtre s'ouvre aussi bien depuis la liste que depuis le
+détail.
+
+La fenêtre reprend le code couleur de la vue liste : le numéro et la flèche en
+gris, le titre en couleur par défaut, les deux branches du bleu de la colonne de la
+branche visée, les méthodes
 refusées du même gris que les colonnes secondaires de la liste, et le message
 d'erreur de GitHub en rouge. Comme dans la liste, la ligne sélectionnée n'est pas
 surlignée : le marqueur suffit, et c'est le même — `SELECTION_MARKER`, défini une
@@ -92,6 +99,8 @@ struct MergeChoice {
 struct MergeDialog {
     key: PrKey,
     title: String,
+    base_ref: String,            // branche visée
+    head_ref: String,            // branche d'origine
     methods: Vec<MergeChoice>,   // les trois, dans l'ordre de MERGE_METHODS
     selected: usize,
     state: MergeDialogState,
@@ -183,6 +192,8 @@ fusion, une confirmation.
 
 ## Critères de réussite
 
+- Le premier rang de la fenêtre porte le numéro puis le titre, le second la branche
+  visée, une flèche vers la gauche et la branche d'origine.
 - La fenêtre liste toujours les trois méthodes, dans l'ordre commit de fusion,
   écrasement, rebasage.
 - Un dépôt n'autorisant que l'écrasement affiche le commit de fusion et le rebasage

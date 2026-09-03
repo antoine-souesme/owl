@@ -173,6 +173,9 @@ pub struct MergeChoice {
 pub struct MergeDialog {
     pub key: PrKey,
     pub title: String,
+    /// Branche visée et branche d'origine, affichées en en-tête de la fenêtre.
+    pub base_ref: String,
+    pub head_ref: String,
     /// Les trois méthodes, dans l'ordre de `MERGE_METHODS`, chacune avec
     /// l'autorisation du dépôt.
     pub methods: Vec<MergeChoice>,
@@ -672,6 +675,8 @@ impl App {
         self.merge = Some(MergeDialog {
             key: summary.key.clone(),
             title: summary.title.clone(),
+            base_ref: summary.base_ref.clone(),
+            head_ref: summary.head_ref.clone(),
             methods,
             selected,
             state: MergeDialogState::Choosing,
@@ -944,6 +949,7 @@ pub(crate) mod tests {
             review: ReviewState::Approved,
             mergeable: MergeableState::Mergeable,
             base_ref: "develop".to_string(),
+            head_ref: "ma-branche".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: RepoMergeRules {
                 squash: true,
@@ -1306,7 +1312,6 @@ pub(crate) mod tests {
             summary,
             node_id: node_id.to_string(),
             body: String::new(),
-            head_ref: "branche".to_string(),
             checks: Vec::new(),
             reviews: Vec::new(),
             comments: Vec::new(),
@@ -2085,7 +2090,6 @@ pub(crate) mod tests {
         PrDetail {
             node_id: format!("PR_{number}"),
             body: "Première ligne.\nSeconde ligne.".to_string(),
-            head_ref: "ma-branche".to_string(),
             checks: vec![CheckRun {
                 name: "tests".to_string(),
                 state: ChecksState::Success,

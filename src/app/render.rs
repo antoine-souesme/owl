@@ -447,7 +447,7 @@ fn detail_body(detail: &PrDetail, time: &str) -> Vec<DetailLine> {
     let mut lines = section("Branches");
     lines.push(DetailLine::plain(format!(
         "{INDENT}{} -> {}",
-        detail.head_ref, detail.summary.base_ref
+        detail.summary.head_ref, detail.summary.base_ref
     )));
 
     lines.extend(section("Status"));
@@ -642,6 +642,8 @@ impl MergeLine {
 }
 
 const MERGE_TITLE: &str = " Merge ";
+/// Flèche de l'en-tête : la branche d'origine va vers la branche visée.
+const MERGE_ARROW: &str = " ← ";
 const HELP_CHOOSING: &str = "Enter to confirm · Esc to cancel";
 const HELP_FAILED: &str = "Enter to retry · Esc to close";
 const MERGING: &str = "Merging…";
@@ -688,17 +690,24 @@ impl App {
             .saturating_sub(OUTSIDE_CONTENT)
             .clamp(1, MAX_CONTENT_WIDTH);
 
-        // Les tons de l'en-tête sont ceux de la liste : dépôt en cyan,
-        // séparateur et numéro en gris, titre en couleur par défaut.
+        // Les tons de l'en-tête sont ceux de la liste : numéro et flèche en
+        // gris, titre en couleur par défaut, branches en bleu comme la
+        // colonne de la branche visée.
         let mut lines = vec![
             MergeLine {
                 cells: vec![
-                    Cell::toned(dialog.key.repo.clone(), Tone::Cyan),
-                    Cell::toned(SEPARATOR, Tone::Gray),
                     Cell::toned(format!("#{}", dialog.key.number), Tone::Gray),
+                    Cell::plain(" "),
+                    Cell::plain(dialog.title.clone()),
                 ],
             },
-            MergeLine::plain(dialog.title.clone()),
+            MergeLine {
+                cells: vec![
+                    Cell::toned(dialog.base_ref.clone(), Tone::Blue),
+                    Cell::toned(MERGE_ARROW, Tone::Gray),
+                    Cell::toned(dialog.head_ref.clone(), Tone::Blue),
+                ],
+            },
             MergeLine::empty(),
         ];
 
@@ -1352,7 +1361,7 @@ mod tests {
     }
 
     #[test]
-    fn the_dialog_shows_the_repo_the_title_and_the_three_methods_in_order() {
+    fn the_dialog_shows_the_number_the_title_the_branches_and_the_three_methods_in_order() {
         let app = app_with_dialog(all_allowed());
         let render = app
             .merge_render(LARGE)
@@ -1360,8 +1369,8 @@ mod tests {
         let texts: Vec<String> = render.lines.iter().map(MergeLine::text).collect();
 
         assert_eq!(render.title, " Merge ");
-        assert_eq!(texts[0], "moi/depot │ #142");
-        assert_eq!(texts[1], "Titre 142");
+        assert_eq!(texts[0], "#142 Titre 142");
+        assert_eq!(texts[1], "develop ← ma-branche");
         assert_eq!(
             texts[3..7],
             [
@@ -1381,17 +1390,23 @@ mod tests {
             .merge_render(LARGE)
             .expect("la fenêtre doit être ouverte");
 
-        // Le séparateur et le numéro portent le même gris : le repli les
-        // rend en un seul morceau, ce qui ne change rien à l'affichage.
+        // Le numéro est gris, et le titre garde la couleur par défaut du
+        // terminal, comme dans la liste.
         assert_eq!(
             render.lines[0].cells,
+            vec![Cell::toned("#142", Tone::Gray), Cell::plain(" Titre 142"),]
+        );
+        // Les deux branches portent le bleu de la colonne de la branche
+        // visée ; le repli les rend en un seul morceau quand elles se
+        // touchent, ce qui ne change rien à l'affichage.
+        assert_eq!(
+            render.lines[1].cells,
             vec![
-                Cell::toned("moi/depot", Tone::Cyan),
-                Cell::toned(" │ #142", Tone::Gray),
+                Cell::toned("develop", Tone::Blue),
+                Cell::toned(" ← ", Tone::Gray),
+                Cell::toned("ma-branche", Tone::Blue),
             ]
         );
-        // Le titre garde la couleur par défaut du terminal, comme dans la liste.
-        assert_eq!(render.lines[1].cells, vec![Cell::plain("Titre 142")]);
     }
 
     #[test]

@@ -580,6 +580,7 @@ mod tests {
             review: crate::model::ReviewState::Approved,
             mergeable: crate::model::MergeableState::Mergeable,
             base_ref: "develop".to_string(),
+            head_ref: "ma-branche".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: crate::model::RepoMergeRules {
                 squash: true,
@@ -612,6 +613,7 @@ mod tests {
             review: crate::model::ReviewState::None,
             mergeable: crate::model::MergeableState::Unknown,
             base_ref: "develop".to_string(),
+            head_ref: "ma-branche".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: crate::model::RepoMergeRules {
                 squash: true,
@@ -644,6 +646,7 @@ mod tests {
             review: ReviewState::Approved,
             mergeable: MergeableState::Mergeable,
             base_ref: "develop".to_string(),
+            head_ref: "ma-branche".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: RepoMergeRules {
                 squash: true,

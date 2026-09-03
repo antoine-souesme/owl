@@ -4,7 +4,6 @@
       "pullRequest": {
         "id": "PR_kwDOABCD12345",
         "body": "Ajoute la fenêtre de fusion et ses raccourcis.",
-        "headRefName": "feat/fusion",
         "baseRefName": "develop",
         "additions": 214,
         "deletions": 37,
