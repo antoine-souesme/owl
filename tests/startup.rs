@@ -6,7 +6,7 @@ use std::process::Command;
 use tempfile::TempDir;
 
 /// Lance `owl` sans aucune variable d'environnement et sans `gh` accessible.
-fn owl_sans_authentification() -> std::process::Output {
+fn owl_without_auth() -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_owl"))
         .env_clear()
         .env("PATH", "")
@@ -16,29 +16,29 @@ fn owl_sans_authentification() -> std::process::Output {
 }
 
 #[test]
-fn sans_jeton_ni_gh_le_message_indique_d_installer_gh() {
-    let sortie = owl_sans_authentification();
-    let erreur = String::from_utf8_lossy(&sortie.stderr);
+fn without_a_token_or_gh_the_message_says_to_install_gh() {
+    let output = owl_without_auth();
+    let error = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
-        erreur.trim(),
-        "owl a besoin de gh. Installe-le, puis lance `gh auth login`."
+        error.trim(),
+        "owl needs gh. Install it, then run `gh auth login`."
     );
 }
 
 #[test]
-fn sans_jeton_le_code_de_sortie_est_non_nul() {
-    let sortie = owl_sans_authentification();
+fn without_a_token_the_exit_code_is_non_zero() {
+    let output = owl_without_auth();
     assert!(
-        !sortie.status.success(),
+        !output.status.success(),
         "code de sortie = {:?}",
-        sortie.status.code()
+        output.status.code()
     );
 }
 
 #[test]
-fn sans_jeton_rien_n_est_ecrit_sur_la_sortie_standard() {
-    let sortie = owl_sans_authentification();
-    let standard = String::from_utf8_lossy(&sortie.stdout);
+fn without_a_token_nothing_is_written_to_standard_output() {
+    let output = owl_without_auth();
+    let standard = String::from_utf8_lossy(&output.stdout);
     assert!(
         standard.is_empty(),
         "la sortie standard doit rester vide, pas de séquence d'échappement : {standard:?}"
@@ -51,34 +51,34 @@ fn sans_jeton_rien_n_est_ecrit_sur_la_sortie_standard() {
 
 /// Écrit un fichier de réglages dans un dossier personnel temporaire, lance
 /// `owl` dessus, et rend le chemin du fichier avec la sortie du programme.
-fn owl_avec_reglages(contenu: &str) -> (PathBuf, std::process::Output) {
+fn owl_with_settings(content: &str) -> (PathBuf, std::process::Output) {
     let maison = TempDir::new().expect("dossier temporaire");
-    let dossier = maison.path().join(".config").join("owl");
-    std::fs::create_dir_all(&dossier).expect("création du dossier de réglages");
-    let fichier = dossier.join("config.toml");
-    std::fs::write(&fichier, contenu).expect("écriture des réglages");
+    let directory = maison.path().join(".config").join("owl");
+    std::fs::create_dir_all(&directory).expect("création du dossier de réglages");
+    let file = directory.join("config.toml");
+    std::fs::write(&file, content).expect("écriture des réglages");
 
-    let sortie = Command::new(env!("CARGO_BIN_EXE_owl"))
+    let output = Command::new(env!("CARGO_BIN_EXE_owl"))
         .env_clear()
         .env("PATH", "")
         .env("HOME", maison.path())
         .output()
         .expect("le binaire owl doit être exécutable");
 
-    (fichier, sortie)
+    (file, output)
 }
 
 /// Vérifie la forme complète d'une erreur de démarrage : message exact sur la
 /// sortie d'erreur, code non nul, et sortie standard restée vierge.
-fn verifier_erreur_de_demarrage(sortie: &std::process::Output, message: &str) {
-    let erreur = String::from_utf8_lossy(&sortie.stderr);
-    assert_eq!(erreur.trim(), message);
+fn assert_startup_error(output: &std::process::Output, message: &str) {
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(error.trim(), message);
     assert!(
-        !sortie.status.success(),
+        !output.status.success(),
         "code de sortie = {:?}",
-        sortie.status.code()
+        output.status.code()
     );
-    let standard = String::from_utf8_lossy(&sortie.stdout);
+    let standard = String::from_utf8_lossy(&output.stdout);
     assert!(
         standard.is_empty(),
         "aucune prise de contrôle du terminal : {standard:?}"
@@ -86,31 +86,31 @@ fn verifier_erreur_de_demarrage(sortie: &std::process::Output, message: &str) {
 }
 
 #[test]
-fn une_valeur_de_reglage_invalide_nomme_sa_cle_et_son_chemin() {
-    let (fichier, sortie) = owl_avec_reglages("page_size = 0\n");
-    verifier_erreur_de_demarrage(
-        &sortie,
-        &format!("Réglages invalides dans {} : page_size.", fichier.display()),
+fn an_invalid_setting_value_names_its_key_and_its_path() {
+    let (file, output) = owl_with_settings("page_size = 0\n");
+    assert_startup_error(
+        &output,
+        &format!("Invalid settings in {}: page_size.", file.display()),
     );
 }
 
 #[test]
-fn une_syntaxe_toml_cassee_le_dit_avec_son_chemin() {
-    let (fichier, sortie) = owl_avec_reglages("filters = [\n");
-    verifier_erreur_de_demarrage(
-        &sortie,
+fn broken_toml_syntax_says_so_with_its_path() {
+    let (file, output) = owl_with_settings("filters = [\n");
+    assert_startup_error(
+        &output,
         &format!(
-            "Réglages invalides dans {} : syntaxe TOML invalide.",
-            fichier.display()
+            "Invalid settings in {}: invalid TOML syntax.",
+            file.display()
         ),
     );
 }
 
 #[test]
-fn une_liste_de_filtres_vide_a_son_propre_message() {
-    let (_, sortie) = owl_avec_reglages("filters = []\n");
-    verifier_erreur_de_demarrage(
-        &sortie,
-        "Aucun filtre actif : la recherche ramènerait tout GitHub.",
+fn an_empty_filter_list_has_its_own_message() {
+    let (_, output) = owl_with_settings("filters = []\n");
+    assert_startup_error(
+        &output,
+        "No active filter: the search would return all of GitHub.",
     );
 }

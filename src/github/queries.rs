@@ -1,6 +1,6 @@
 //! Requêtes GraphQL et mutation de fusion.
 //!
-//! Les documents sont recopiés de `docs/specs/01-modele-et-donnees.md` sans
+//! Les documents sont recopiés de `docs/specs/01-modele-et-data.md` sans
 //! reformulation : la spec fait foi, et une différence se lit d'un coup d'œil.
 
 /// Liste des pull requests. `$q` est la chaîne de recherche, `$n` le nombre
@@ -18,6 +18,7 @@ pub const LIST: &str = r#"query List($q: String!, $n: Int!) {
         isDraft
         mergeable
         reviewDecision
+        baseRefName
         updatedAt
         author { login }
         repository {
@@ -44,7 +45,6 @@ pub const DETAIL: &str = r#"query Detail($owner: String!, $name: String!, $numbe
       id
       body
       headRefName
-      baseRefName
       additions
       deletions
       commits(last: 1) {

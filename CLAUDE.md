@@ -53,8 +53,10 @@ surprenantes comprises. On les complète plutôt que de contourner un cas gênan
 
 ## Conventions
 
-- Le projet est en français : messages affichés, commentaires, commits. Les
-  identifiants du code restent en anglais.
+- Le code est en anglais : identifiants, variables, noms de tests. L'interface
+  aussi : tout ce que l'utilisateur lit, messages d'erreur du démarrage compris.
+- Les commentaires, les documents de `docs/` et les messages de commit sont en
+  français.
 - Les messages d'erreur de GitHub sont affichés tels quels, sans reformulation. Ils
   disent quoi faire mieux qu'un message maison.
 - `owl` ne duplique pas les règles de GitHub. Les protections de branche sont

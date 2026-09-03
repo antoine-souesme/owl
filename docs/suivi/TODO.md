@@ -1,10 +1,5 @@
-- Le code doit être en anglais
-- L'interface utilisateur doit être en anglais
-- Mettre une séparation entre le nom du repo et le numéro de PR
-- Mettre des code couleurs sur les différents éléments (repo, numéro, etc...) : Proposer avant de coder
-- Retirer tous les tirets cadratin de l'UI
-- Le titre devient "Owl - Monitoring pull requests"
-- Séparer un peu plus visuellement les données sur la vue détails, demande moi si tu n'es pas sur de quoi faire
-- Ajouter une colonne correspondant à la date relative ultra simple (d = jour, h = heure, m = min) (exemple : 3d / 34m / 7h)
-- Ajouter une colonne correspondant à la target de la pr
-- Après une fusion, il faut refresh la liste
+# À faire
+
+Registre des demandes en attente. Une entrée en sort quand elle est livrée.
+
+Rien en attente.

@@ -29,35 +29,35 @@ use crate::app::{App, Command, Event, Key};
 fn main() -> ExitCode {
     // Les erreurs de démarrage sont écrites avant toute prise de contrôle du
     // terminal, donc jamais avalées par l'écran alterné.
-    let reglages = match config::load() {
-        Ok(valeur) => valeur,
-        Err(erreur) => {
-            eprintln!("{erreur}");
+    let settings = match config::load() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
 
-    let jeton = match token::resolve() {
-        Ok(valeur) => valeur,
-        Err(erreur) => {
-            eprintln!("{erreur}");
+    let token = match token::resolve() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
 
     // L'exécuteur n'est construit qu'après les vérifications de démarrage.
-    let execution = match tokio::runtime::Runtime::new() {
-        Ok(valeur) => valeur,
-        Err(erreur) => {
-            eprintln!("{erreur}");
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
 
-    match execution.block_on(run(reglages, jeton)) {
+    match runtime.block_on(run(settings, token)) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(erreur) => {
-            eprintln!("{erreur}");
+        Err(error) => {
+            eprintln!("{error}");
             ExitCode::FAILURE
         }
     }
@@ -72,7 +72,7 @@ impl Drop for TerminalGuard {
     }
 }
 
-type Ecran = Terminal<CrosstermBackend<Stdout>>;
+type Screen = Terminal<CrosstermBackend<Stdout>>;
 
 /// Prend le contrôle du terminal et installe le crochet de panique.
 /// Le garde couvre la sortie normale et l'erreur, le crochet couvre la panique.
@@ -81,22 +81,22 @@ type Ecran = Terminal<CrosstermBackend<Stdout>>;
 /// une tâche n'arrête que cette tâche, alors que le crochet rend déjà le
 /// terminal. Sans un `Quit` poussé dans la file, la boucle continuerait à
 /// dessiner par-dessus le shell rendu à l'utilisateur.
-fn enter_terminal(envoi: UnboundedSender<Event>) -> Result<(Ecran, TerminalGuard)> {
-    let crochet_precedent = std::panic::take_hook();
+fn enter_terminal(sender: UnboundedSender<Event>) -> Result<(Screen, TerminalGuard)> {
+    let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |infos| {
         restore_terminal();
-        let _ = envoi.send(Event::Quit);
-        crochet_precedent(infos);
+        let _ = sender.send(Event::Quit);
+        previous_hook(infos);
     }));
 
     enable_raw_mode()?;
     // Le garde naît dès la première prise de contrôle réussie : toute erreur
     // rencontrée ensuite rend malgré tout le terminal en sortant de portée.
-    let garde = TerminalGuard;
-    let mut sortie = io::stdout();
-    execute!(sortie, EnterAlternateScreen)?;
-    let terminal = Terminal::new(CrosstermBackend::new(sortie))?;
-    Ok((terminal, garde))
+    let guard = TerminalGuard;
+    let mut output = io::stdout();
+    execute!(output, EnterAlternateScreen)?;
+    let terminal = Terminal::new(CrosstermBackend::new(output))?;
+    Ok((terminal, guard))
 }
 
 /// Rend le terminal à l'utilisateur. Volontairement tolérante aux erreurs :
@@ -106,49 +106,49 @@ fn restore_terminal() {
     let _ = execute!(io::stdout(), LeaveAlternateScreen);
 }
 
-async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
-    let intervalle = reglages.refresh_interval;
+async fn run(settings: config::Config, token: token::Token) -> Result<()> {
+    let interval = settings.refresh_interval;
     // Le client est construit une fois pour toutes : il porte le jeton dans
     // ses en-têtes, et c'est le seul endroit du programme où le jeton reste.
-    let client = Arc::new(github::Client::new(jeton.expose())?);
-    let mut etat = App::new(reglages);
+    let client = Arc::new(github::Client::new(token.expose())?);
+    let mut state = App::new(settings);
 
     // La première requête part avant l'écran : un jeton refusé ou des droits
     // insuffisants sont des erreurs de démarrage, et leur message doit sortir
     // sur la sortie d'erreur, pas finir en ligne de barre d'état.
-    let premiers = premiere_requete(&mut etat, &client).await?;
+    let first_events = first_request(&mut state, &client).await?;
 
-    let (envoi, mut reception) = mpsc::unbounded_channel::<Event>();
+    let (sender, mut inbox) = mpsc::unbounded_channel::<Event>();
 
     // Le résultat déjà obtenu entre dans la file avant tout le reste : la
     // boucle le traitera à son premier tour.
-    for evenement in premiers {
-        let _ = envoi.send(evenement);
+    for event in first_events {
+        let _ = sender.send(event);
     }
 
     // L'écran est pris avant de lancer les producteurs : le clavier doit lire
     // un terminal en mode brut, jamais un terminal encore en mode ligne.
-    let (mut terminal, _garde) = enter_terminal(envoi.clone())?;
+    let (mut terminal, _guard) = enter_terminal(sender.clone())?;
 
     // Producteur 1 : le clavier, dans une tâche bloquante dédiée.
-    spawn_keyboard(envoi.clone());
+    spawn_keyboard(sender.clone());
 
     // Producteur 2 : le minuteur de rafraîchissement, si activé.
-    if intervalle > 0 {
-        spawn_timer(envoi.clone(), intervalle);
+    if interval > 0 {
+        spawn_timer(sender.clone(), interval);
     }
 
-    terminal.draw(|cadre| ui::draw(cadre, &etat))?;
+    terminal.draw(|frame| ui::draw(frame, &state))?;
 
-    while let Some(evenement) = reception.recv().await {
-        let mut arret = false;
-        for commande in etat.handle(evenement) {
-            arret |= execute_command(commande, &envoi, &client);
+    while let Some(event) = inbox.recv().await {
+        let mut stop = false;
+        for command in state.handle(event) {
+            stop |= execute_command(command, &sender, &client);
         }
-        if arret {
+        if stop {
             break;
         }
-        terminal.draw(|cadre| ui::draw(cadre, &etat))?;
+        terminal.draw(|frame| ui::draw(frame, &state))?;
     }
 
     Ok(())
@@ -157,17 +157,17 @@ async fn run(reglages: config::Config, jeton: token::Token) -> Result<()> {
 /// Exécute la demande initiale de `app` et rend les événements à injecter
 /// dans la boucle. Une erreur de démarrage remonte en `Err` : `main` l'écrit
 /// et s'arrête, le terminal n'ayant jamais été pris.
-async fn premiere_requete(etat: &mut App, client: &Arc<github::Client>) -> Result<Vec<Event>> {
+async fn first_request(state: &mut App, client: &Arc<github::Client>) -> Result<Vec<Event>> {
     let mut evenements = Vec::new();
-    for commande in etat.start() {
-        match commande {
+    for command in state.start() {
+        match command {
             Command::FetchList {
                 generation,
                 query,
                 page_size,
             } => {
-                let resultat = client.fetch_pull_requests(&query, page_size).await;
-                match startup::classify(resultat) {
+                let result = client.fetch_pull_requests(&query, page_size).await;
+                match startup::classify(result) {
                     startup::FirstResponse::Fatal(message) => return Err(anyhow::anyhow!(message)),
                     startup::FirstResponse::Start(result) => {
                         evenements.push(Event::ListLoaded { generation, result })
@@ -176,7 +176,7 @@ async fn premiere_requete(etat: &mut App, client: &Arc<github::Client>) -> Resul
             }
             // `start` n'émet que la demande de liste. Toute autre commande
             // serait un changement de `app` non répercuté ici.
-            autre => unreachable!("commande inattendue au démarrage : {autre:?}"),
+            other => unreachable!("commande inattendue au démarrage : {other:?}"),
         }
     }
     Ok(evenements)
@@ -186,40 +186,37 @@ async fn premiere_requete(etat: &mut App, client: &Arc<github::Client>) -> Resul
 /// l'arrêt de la boucle. C'est le seul endroit où le jeton circule : il
 /// n'entre jamais dans `app` ni dans `ui`.
 fn execute_command(
-    commande: Command,
-    envoi: &UnboundedSender<Event>,
+    command: Command,
+    sender: &UnboundedSender<Event>,
     client: &Arc<github::Client>,
 ) -> bool {
-    match commande {
+    match command {
         Command::Quit => return true,
         Command::FetchList {
             generation,
             query,
             page_size,
         } => {
-            let envoi = envoi.clone();
+            let sender = sender.clone();
             let client = client.clone();
             tokio::spawn(async move {
-                let resultat = client.fetch_pull_requests(&query, page_size).await;
-                let _ = envoi.send(Event::ListLoaded {
-                    generation,
-                    result: resultat,
-                });
+                let result = client.fetch_pull_requests(&query, page_size).await;
+                let _ = sender.send(Event::ListLoaded { generation, result });
             });
         }
         Command::FetchDetail {
             generation,
             summary,
         } => {
-            let envoi = envoi.clone();
+            let sender = sender.clone();
             let client = client.clone();
-            let cle = summary.key.clone();
+            let key = summary.key.clone();
             tokio::spawn(async move {
-                let resultat = client.fetch_detail(&summary).await;
-                let _ = envoi.send(Event::DetailLoaded {
+                let result = client.fetch_detail(&summary).await;
+                let _ = sender.send(Event::DetailLoaded {
                     generation,
-                    key: cle,
-                    result: resultat,
+                    key,
+                    result,
                 });
             });
         }
@@ -228,15 +225,12 @@ fn execute_command(
             node_id,
             method,
         } => {
-            let envoi = envoi.clone();
+            let sender = sender.clone();
             let client = client.clone();
-            let cle = summary.key.clone();
+            let key = summary.key.clone();
             tokio::spawn(async move {
-                let resultat = client.merge_pull_request(&summary, node_id, method).await;
-                let _ = envoi.send(Event::MergeFinished {
-                    key: cle,
-                    result: resultat,
-                });
+                let result = client.merge_pull_request(&summary, node_id, method).await;
+                let _ = sender.send(Event::MergeFinished { key, result });
             });
         }
         Command::OpenInBrowser { url } => {
@@ -254,13 +248,13 @@ fn execute_command(
 
 /// Lit le clavier dans une tâche bloquante et traduit les touches pour `app`.
 /// La traduction est faite ici pour que `app` ne dépende pas de `crossterm`.
-fn spawn_keyboard(envoi: UnboundedSender<Event>) {
+fn spawn_keyboard(sender: UnboundedSender<Event>) {
     tokio::task::spawn_blocking(move || loop {
         // Le sondage évite de bloquer indéfiniment sur un canal fermé.
         match crossterm::event::poll(Duration::from_millis(200)) {
             Ok(true) => {}
             Ok(false) => {
-                if envoi.is_closed() {
+                if sender.is_closed() {
                     return;
                 }
                 continue;
@@ -269,28 +263,28 @@ fn spawn_keyboard(envoi: UnboundedSender<Event>) {
             // arriver, et le mode brut a désarmé Ctrl-C. On demande l'arrêt
             // plutôt que de laisser le programme figé.
             Err(_) => {
-                let _ = envoi.send(Event::Quit);
+                let _ = sender.send(Event::Quit);
                 return;
             }
         }
 
-        let touche = match crossterm::event::read() {
-            Ok(TerminalEvent::Key(touche)) => touche,
+        let key_pressed = match crossterm::event::read() {
+            Ok(TerminalEvent::Key(key_pressed)) => key_pressed,
             // Le redimensionnement remonte à `app` pour que la boucle
             // redessine : sans lui, l'écran reste figé à l'ancienne taille
             // jusqu'à la touche ou le tour de minuteur suivant.
             Ok(TerminalEvent::Resize(..)) => {
-                if envoi.send(Event::Resize).is_err() {
+                if sender.send(Event::Resize).is_err() {
                     return;
                 }
                 continue;
             }
             _ => continue,
         };
-        if touche.kind != KeyEventKind::Press {
+        if key_pressed.kind != KeyEventKind::Press {
             continue;
         }
-        let traduite = match (touche.code, touche.modifiers) {
+        let traduite = match (key_pressed.code, key_pressed.modifiers) {
             // Ctrl+C d'abord : sans ce cas, elle passerait pour un « c ».
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => Key::CtrlC,
             (KeyCode::Char(caractere), _) => Key::Char(caractere),
@@ -302,16 +296,16 @@ fn spawn_keyboard(envoi: UnboundedSender<Event>) {
             (KeyCode::Esc, _) => Key::Esc,
             _ => Key::Other,
         };
-        if envoi.send(Event::Key(traduite)).is_err() {
+        if sender.send(Event::Key(traduite)).is_err() {
             return;
         }
     });
 }
 
 /// Émet un `Tick` à intervalle régulier.
-fn spawn_timer(envoi: UnboundedSender<Event>, secondes: u64) {
+fn spawn_timer(sender: UnboundedSender<Event>, seconds: u64) {
     tokio::spawn(async move {
-        let mut minuteur = tokio::time::interval(Duration::from_secs(secondes));
+        let mut minuteur = tokio::time::interval(Duration::from_secs(seconds));
         // Une boucle ralentie ne doit pas rattraper les tours manqués : sinon
         // chaque retard déclencherait une rafale de requêtes.
         minuteur.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -320,7 +314,7 @@ fn spawn_timer(envoi: UnboundedSender<Event>, secondes: u64) {
         minuteur.tick().await;
         loop {
             minuteur.tick().await;
-            if envoi.send(Event::Tick).is_err() {
+            if sender.send(Event::Tick).is_err() {
                 return;
             }
         }

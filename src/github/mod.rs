@@ -2,7 +2,7 @@
 //!
 //! Un seul point d'entrée HTTP. Le client classe chaque réponse, et c'est ce
 //! classement qui pilote le traitement des erreurs décrit en
-//! `docs/specs/05-erreurs-et-tests.md`.
+//! `docs/specs/05-errors-et-tests.md`.
 
 pub mod dto;
 pub mod queries;
@@ -38,24 +38,24 @@ pub enum GithubError {
     /// est repris tel quel : il dit quoi faire mieux qu'un message maison.
     #[error("{0}")]
     Api(String),
-    #[error("Jeton refusé par GitHub. Lance `gh auth login` pour le renouveler.")]
+    #[error("Token refused by GitHub. Run `gh auth login` to renew it.")]
     Unauthorized,
-    #[error("Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`.")]
+    #[error("The token lacks the required permissions. Check the `repo` scope.")]
     Forbidden,
     /// L'heure de reprise est portée par la variante et non par le message :
     /// composer « limite d'appels atteinte, reprise à 14 h 32 » est une
     /// décision d'affichage, donc le travail de `app`, à la spec 05.
-    #[error("Limite d'appels atteinte.")]
+    #[error("Rate limit reached.")]
     RateLimited { reset_at: Option<DateTime<Utc>> },
-    #[error("GitHub a répondu {0}.")]
+    #[error("GitHub responded {0}.")]
     Http(u16),
-    #[error("Réponse illisible de GitHub.")]
+    #[error("Unreadable response from GitHub.")]
     Malformed,
     /// Aucun détail de `reqwest` n'est repris : ses messages peuvent citer
     /// l'URL et les en-têtes, où voyage le jeton.
-    #[error("Réseau injoignable.")]
+    #[error("Network unreachable.")]
     Transport,
-    #[error("Pull request introuvable.")]
+    #[error("Pull request not found.")]
     NotFound,
 }
 
@@ -86,20 +86,20 @@ impl Client {
 
     /// Point d'entrée réglable : les tests visent un serveur local.
     fn with_endpoint(token: &str, endpoint: &str) -> Result<Self, GithubError> {
-        let mut entetes = HeaderMap::new();
+        let mut headers = HeaderMap::new();
 
-        let mut autorisation = HeaderValue::from_str(&format!("Bearer {token}"))
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| GithubError::Unauthorized)?;
         // Marqué sensible : `reqwest` ne l'écrit pas dans ses traces.
-        autorisation.set_sensitive(true);
-        entetes.insert(AUTHORIZATION, autorisation);
-        entetes.insert(
+        authorization.set_sensitive(true);
+        headers.insert(AUTHORIZATION, authorization);
+        headers.insert(
             USER_AGENT,
             HeaderValue::from_static(concat!("owl/", env!("CARGO_PKG_VERSION"))),
         );
 
         let http = reqwest::Client::builder()
-            .default_headers(entetes)
+            .default_headers(headers)
             // Une connexion pendue ne renvoie jamais d'événement : sans
             // délai maximal, la barre d'état resterait bloquée sur son
             // message de chargement et les tâches de rafraîchissement
@@ -119,57 +119,57 @@ impl Client {
     async fn execute<T: DeserializeOwned>(
         &self,
         query: &str,
-        variables: serde_json::Value,
+        variables_json: serde_json::Value,
     ) -> Result<T, GithubError> {
-        let reponse = self
+        let response = self
             .http
             .post(&self.endpoint)
-            .json(&json!({ "query": query, "variables": variables }))
+            .json(&json!({ "query": query, "variables": variables_json }))
             .send()
             .await
             .map_err(|_| GithubError::Transport)?;
 
-        let statut = reponse.status();
-        let limite = limite_d_appels(reponse.headers());
-        let corps = reponse.text().await.map_err(|_| GithubError::Transport)?;
+        let status = response.status();
+        let limit = rate_limited(response.headers());
+        let body = response.text().await.map_err(|_| GithubError::Transport)?;
 
-        if statut == StatusCode::UNAUTHORIZED {
+        if status == StatusCode::UNAUTHORIZED {
             return Err(GithubError::Unauthorized);
         }
-        if statut == StatusCode::FORBIDDEN || statut == StatusCode::TOO_MANY_REQUESTS {
+        if status == StatusCode::FORBIDDEN || status == StatusCode::TOO_MANY_REQUESTS {
             // Le solde à zéro tranche pour la limite primaire ; `retry-after`
             // pour la limite secondaire. Les deux surviennent avec les
             // en-têtes `x-ratelimit-*`, présents aussi sur un simple refus de
             // droits : leur seule présence ne dit rien.
-            return Err(match limite {
+            return Err(match limit {
                 Some(reset_at) => GithubError::RateLimited { reset_at },
                 // Sans en-tête, seul le corps distingue la limite secondaire
                 // du refus de droits ; un 429, lui, ne sert qu'aux limites.
-                None if statut == StatusCode::TOO_MANY_REQUESTS
-                    || limite_secondaire_annoncee(&corps) =>
+                None if status == StatusCode::TOO_MANY_REQUESTS
+                    || secondary_limit_announced(&body) =>
                 {
                     GithubError::RateLimited { reset_at: None }
                 }
                 None => GithubError::Forbidden,
             });
         }
-        if !statut.is_success() {
-            return Err(GithubError::Http(statut.as_u16()));
+        if !status.is_success() {
+            return Err(GithubError::Http(status.as_u16()));
         }
 
-        let enveloppe: Envelope<T> =
-            serde_json::from_str(&corps).map_err(|_| GithubError::Malformed)?;
+        let envelope: Envelope<T> =
+            serde_json::from_str(&body).map_err(|_| GithubError::Malformed)?;
 
-        if let Some(erreurs) = enveloppe.errors.filter(|liste| !liste.is_empty()) {
-            let message = erreurs
+        if let Some(errors) = envelope.errors.filter(|list| !list.is_empty()) {
+            let message = errors
                 .into_iter()
-                .map(|erreur| erreur.message)
+                .map(|error| error.message)
                 .collect::<Vec<_>>()
                 .join(" · ");
             return Err(GithubError::Api(message));
         }
 
-        enveloppe.data.ok_or(GithubError::Malformed)
+        envelope.data.ok_or(GithubError::Malformed)
     }
 
     /// Ramène les pull requests correspondant aux filtres, avec le solde
@@ -177,15 +177,15 @@ impl Client {
     ///
     /// Un solde à zéro n'est pas une erreur : les données de cette réponse
     /// sont bonnes. La suspension du rafraîchissement qu'il déclenche
-    /// appartient à `05-erreurs-et-tests.md`.
+    /// appartient à `05-errors-et-tests.md`.
     pub async fn fetch_pull_requests(
         &self,
         query: &str,
         page_size: u16,
     ) -> Result<ListPage, GithubError> {
-        let variables = json!({ "q": query, "n": page_size });
-        let donnees: dto::ListData = self.execute(queries::LIST, variables).await?;
-        Ok(donnees.to_list_page())
+        let variables_json = json!({ "q": query, "n": page_size });
+        let data: dto::ListData = self.execute(queries::LIST, variables_json).await?;
+        Ok(data.to_list_page())
     }
 
     /// Détail d'une seule pull request, lancé à l'ouverture de la vue détail.
@@ -194,15 +194,14 @@ impl Client {
     /// renvoie aucun de ses champs. Elle apporte en revanche l'identifiant
     /// GraphQL, nécessaire à la fusion.
     pub async fn fetch_detail(&self, summary: &PrSummary) -> Result<PrDetail, GithubError> {
-        let variables = json!({
+        let variables_json = json!({
             "owner": summary.key.owner(),
             "name": summary.key.name(),
             "number": summary.key.number,
         });
-        let donnees: dto::DetailData = self.execute(queries::DETAIL, variables).await?;
-        donnees
-            .repository
-            .and_then(|depot| depot.pull_request)
+        let data: dto::DetailData = self.execute(queries::DETAIL, variables_json).await?;
+        data.repository
+            .and_then(|repo| repo.pull_request)
             .map(|pr| pr.to_detail(summary.clone()))
             .ok_or(GithubError::NotFound)
     }
@@ -223,21 +222,21 @@ impl Client {
         node_id: Option<String>,
         method: MergeMethod,
     ) -> Result<(), GithubError> {
-        let identifiant = match node_id {
-            Some(valeur) => valeur,
+        let id = match node_id {
+            Some(value) => value,
             None => self.fetch_detail(summary).await?.node_id,
         };
-        let variables = json!({ "id": identifiant, "method": methode_graphql(method) });
+        let variables_json = json!({ "id": id, "method": graphql_method(method) });
         // La réponse n'est pas modélisée : seule compte la distinction entre
         // succès et erreur, que `execute` a déjà faite.
-        let _: serde_json::Value = self.execute(queries::MERGE, variables).await?;
+        let _: serde_json::Value = self.execute(queries::MERGE, variables_json).await?;
         Ok(())
     }
 }
 
 /// Nom de la méthode dans le vocabulaire de GitHub. La traduction est ici et
 /// nulle part ailleurs : `model` ne connaît pas ces mots.
-fn methode_graphql(method: MergeMethod) -> &'static str {
+fn graphql_method(method: MergeMethod) -> &'static str {
     match method {
         MergeMethod::Squash => "SQUASH",
         MergeMethod::Rebase => "REBASE",
@@ -252,12 +251,12 @@ fn methode_graphql(method: MergeMethod) -> &'static str {
 /// simple refus de droits. La primaire se lit sur un solde à zéro, la
 /// secondaire sur `retry-after`, un délai en secondes converti ici en heure
 /// absolue.
-fn limite_d_appels(entetes: &HeaderMap) -> Option<Option<DateTime<Utc>>> {
-    if solde_epuise(entetes) {
-        return Some(reset_at(entetes));
+fn rate_limited(headers: &HeaderMap) -> Option<Option<DateTime<Utc>>> {
+    if remaining_exhausted(headers) {
+        return Some(reset_at(headers));
     }
-    if let Some(delai) = retry_after(entetes) {
-        return Some(Some(Utc::now() + chrono::Duration::seconds(delai)));
+    if let Some(delay) = retry_after(headers) {
+        return Some(Some(Utc::now() + chrono::Duration::seconds(delay)));
     }
     None
 }
@@ -266,182 +265,182 @@ fn limite_d_appels(entetes: &HeaderMap) -> Option<Option<DateTime<Utc>>> {
 /// écrit une phrase reconnaissable, seul indice quand les en-têtes de reprise
 /// manquent. Classer ce refus en manque de droits ferait échouer le démarrage
 /// sur un faux diagnostic.
-fn limite_secondaire_annoncee(corps: &str) -> bool {
-    let minuscules = corps.to_lowercase();
+fn secondary_limit_announced(body: &str) -> bool {
+    let minuscules = body.to_lowercase();
     ["secondary rate limit", "abuse detection mechanism"]
         .iter()
         .any(|marqueur| minuscules.contains(marqueur))
 }
 
 /// Vrai quand le solde de la limite primaire est explicitement à zéro.
-fn solde_epuise(entetes: &HeaderMap) -> bool {
-    entetes
+fn remaining_exhausted(headers: &HeaderMap) -> bool {
+    headers
         .get(REMAINING_HEADER)
-        .and_then(|valeur| valeur.to_str().ok())
-        .and_then(|brut| brut.trim().parse::<u64>().ok())
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
         == Some(0)
 }
 
 /// Heure de réinitialisation portée par l'en-tête de limite primaire, en
 /// secondes depuis l'époque.
-fn reset_at(entetes: &HeaderMap) -> Option<DateTime<Utc>> {
-    let brut = entetes.get(RESET_HEADER)?.to_str().ok()?;
-    let secondes: i64 = brut.trim().parse().ok()?;
-    Utc.timestamp_opt(secondes, 0).single()
+fn reset_at(headers: &HeaderMap) -> Option<DateTime<Utc>> {
+    let raw = headers.get(RESET_HEADER)?.to_str().ok()?;
+    let seconds: i64 = raw.trim().parse().ok()?;
+    Utc.timestamp_opt(seconds, 0).single()
 }
 
 /// Délai, en secondes, avant de pouvoir réessayer une limite secondaire.
-fn retry_after(entetes: &HeaderMap) -> Option<i64> {
-    let brut = entetes.get(RETRY_AFTER_HEADER)?.to_str().ok()?;
-    brut.trim().parse().ok()
+fn retry_after(headers: &HeaderMap) -> Option<i64> {
+    let raw = headers.get(RETRY_AFTER_HEADER)?.to_str().ok()?;
+    raw.trim().parse().ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const REPONSE: &str = include_str!("../../tests/fixtures/list.json");
+    const RESPONSE: &str = include_str!("../../tests/fixtures/list.json");
 
-    /// Sert une seule réponse HTTP figée et rend l'adresse à viser.
+    /// Sert une seule réponse HTTP figée et rend l'address à viser.
     ///
     /// Un vrai serveur local plutôt qu'un client simulé : c'est le classement
     /// des réponses — code, en-têtes, corps — qui est testé ici, donc il faut
     /// que `reqwest` fasse réellement le trajet.
-    async fn serveur(statut: &str, entetes: &[(&str, &str)], corps: &str) -> String {
-        let ecoute = tokio::net::TcpListener::bind("127.0.0.1:0")
+    async fn server(status: &str, headers: &[(&str, &str)], body: &str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("un port libre doit être disponible");
-        let adresse = ecoute.local_addr().expect("adresse locale");
+        let address = listener.local_addr().expect("address locale");
 
-        let mut reponse = format!(
-            "HTTP/1.1 {statut}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
-            corps.len()
+        let mut response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
         );
-        for (nom, valeur) in entetes {
-            reponse.push_str(&format!("{nom}: {valeur}\r\n"));
+        for (name, value) in headers {
+            response.push_str(&format!("{name}: {value}\r\n"));
         }
-        reponse.push_str("\r\n");
-        reponse.push_str(corps);
+        response.push_str("\r\n");
+        response.push_str(body);
 
         tokio::spawn(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let (mut flux, _) = ecoute.accept().await.expect("connexion acceptée");
-            let mut tampon = [0u8; 8192];
+            let (mut stream, _) = listener.accept().await.expect("connexion acceptée");
+            let mut buffer = [0u8; 8192];
             // La requête est lue puis ignorée : seule la réponse compte.
-            let _ = flux.read(&mut tampon).await;
-            let _ = flux.write_all(reponse.as_bytes()).await;
-            let _ = flux.flush().await;
+            let _ = stream.read(&mut buffer).await;
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.flush().await;
         });
 
-        format!("http://{adresse}/graphql")
+        format!("http://{address}/graphql")
     }
 
     /// Sert plusieurs réponses HTTP figées d'affilée, une par connexion
-    /// acceptée, dans l'ordre donné. Rend l'adresse à viser et le corps de
+    /// acceptée, dans l'ordre donné. Rend l'address à viser et le corps de
     /// chaque requête reçue, dans l'ordre où elles sont arrivées — c'est ce
     /// qui permet de vérifier qu'un appel enchaîne bien deux requêtes, et
     /// dans quel ordre.
-    async fn serveur_enchaine(
-        corps: &[&str],
+    async fn chained_server(
+        body: &[&str],
     ) -> (String, tokio::sync::mpsc::UnboundedReceiver<String>) {
-        let ecoute = tokio::net::TcpListener::bind("127.0.0.1:0")
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("un port libre doit être disponible");
-        let adresse = ecoute.local_addr().expect("adresse locale");
+        let address = listener.local_addr().expect("address locale");
 
-        let reponses: Vec<String> = corps
+        let responses: Vec<String> = body
             .iter()
-            .map(|corps| {
+            .map(|body| {
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    corps.len(),
-                    corps
+                    body.len(),
+                    body
                 )
             })
             .collect();
 
-        let (emetteur, recepteur) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
 
         tokio::spawn(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            for reponse in reponses {
-                let (mut flux, _) = ecoute.accept().await.expect("connexion acceptée");
-                let mut tampon = [0u8; 8192];
-                let lu = flux.read(&mut tampon).await.unwrap_or(0);
-                let _ = emetteur.send(String::from_utf8_lossy(&tampon[..lu]).into_owned());
-                let _ = flux.write_all(reponse.as_bytes()).await;
-                let _ = flux.flush().await;
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.expect("connexion acceptée");
+                let mut buffer = [0u8; 8192];
+                let read_bytes = stream.read(&mut buffer).await.unwrap_or(0);
+                let _ = sender.send(String::from_utf8_lossy(&buffer[..read_bytes]).into_owned());
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.flush().await;
             }
         });
 
-        (format!("http://{adresse}/graphql"), recepteur)
+        (format!("http://{address}/graphql"), receiver)
     }
 
-    async fn appel(
-        statut: &str,
-        entetes: &[(&str, &str)],
-        corps: &str,
+    async fn call(
+        status: &str,
+        headers: &[(&str, &str)],
+        body: &str,
     ) -> Result<crate::model::ListPage, GithubError> {
-        let point = serveur(statut, entetes, corps).await;
-        let client = Client::with_endpoint("jeton-de-test", &point).expect("client construit");
+        let endpoint = server(status, headers, body).await;
+        let client = Client::with_endpoint("jeton-de-test", &endpoint).expect("client construit");
         client
             .fetch_pull_requests("is:pr author:@me sort:updated-desc", 50)
             .await
     }
 
     #[tokio::test]
-    async fn une_reponse_reussie_donne_la_liste_traduite() {
-        let page = appel("200 OK", &[], REPONSE).await.expect("succès attendu");
+    async fn a_successful_response_gives_the_translated_list() {
+        let page = call("200 OK", &[], RESPONSE).await.expect("succès attendu");
         assert_eq!(page.pull_requests.len(), 5);
         assert_eq!(page.pull_requests[0].key.number, 42);
         assert_eq!(page.rate_limit.expect("solde présent").remaining, 4987);
     }
 
     #[tokio::test]
-    async fn un_tableau_errors_reprend_les_messages_tels_quels() {
-        let corps = r#"{"data":null,"errors":[{"message":"Could not resolve to a Repository"},{"message":"Field 'foo' doesn't exist"}]}"#;
-        let erreur = appel("200 OK", &[], corps)
+    async fn an_errors_array_repeats_the_messages_verbatim() {
+        let body = r#"{"data":null,"errors":[{"message":"Could not resolve to a Repository"},{"message":"Field 'foo' doesn't exist"}]}"#;
+        let error = call("200 OK", &[], body)
             .await
             .expect_err("erreur attendue");
         assert_eq!(
-            erreur.to_string(),
+            error.to_string(),
             "Could not resolve to a Repository · Field 'foo' doesn't exist"
         );
     }
 
     #[tokio::test]
-    async fn une_reponse_401_est_un_jeton_refuse() {
-        let erreur = appel("401 Unauthorized", &[], r#"{"message":"Bad credentials"}"#)
+    async fn a_401_response_is_a_refused_token() {
+        let error = call("401 Unauthorized", &[], r#"{"message":"Bad credentials"}"#)
             .await
             .expect_err("erreur attendue");
-        assert!(matches!(erreur, GithubError::Unauthorized));
+        assert!(matches!(error, GithubError::Unauthorized));
         assert_eq!(
-            erreur.to_string(),
-            "Jeton refusé par GitHub. Lance `gh auth login` pour le renouveler."
+            error.to_string(),
+            "Token refused by GitHub. Run `gh auth login` to renew it."
         );
     }
 
     #[tokio::test]
-    async fn une_reponse_403_sans_aucun_en_tete_est_un_manque_de_droits() {
-        let erreur = appel(
+    async fn a_403_without_any_header_is_missing_permissions() {
+        let error = call(
             "403 Forbidden",
             &[],
             r#"{"message":"Resource not accessible"}"#,
         )
         .await
         .expect_err("erreur attendue");
-        assert!(matches!(erreur, GithubError::Forbidden));
+        assert!(matches!(error, GithubError::Forbidden));
         assert_eq!(
-            erreur.to_string(),
-            "Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`."
+            error.to_string(),
+            "The token lacks the required permissions. Check the `repo` scope."
         );
     }
 
     #[tokio::test]
-    async fn une_reponse_403_avec_en_tetes_de_limite_non_atteinte_est_un_manque_de_droits() {
+    async fn a_403_with_headers_showing_calls_left_is_missing_permissions() {
         // Cas réel de GitHub : un refus de droits porte quand même les
         // en-têtes `x-ratelimit-*`, avec un solde non nul.
-        let erreur = appel(
+        let error = call(
             "403 Forbidden",
             &[
                 ("x-ratelimit-limit", "5000"),
@@ -452,50 +451,50 @@ mod tests {
         )
         .await
         .expect_err("erreur attendue");
-        assert!(matches!(erreur, GithubError::Forbidden));
+        assert!(matches!(error, GithubError::Forbidden));
         assert_eq!(
-            erreur.to_string(),
-            "Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`."
+            error.to_string(),
+            "The token lacks the required permissions. Check the `repo` scope."
         );
     }
 
     #[tokio::test]
-    async fn une_reponse_403_de_limite_secondaire_sans_en_tete_est_une_limite_d_appels() {
+    async fn a_403_secondary_limit_without_headers_is_a_rate_limit() {
         // Sans `retry-after` ni solde à zéro, seul le corps dit que le refus
         // est temporaire. Le classer en manque de droits ferait échouer le
         // démarrage sur un faux diagnostic.
-        let erreur = appel(
+        let error = call(
             "403 Forbidden",
             &[],
             r#"{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}"#,
         )
         .await
         .expect_err("erreur attendue");
-        match erreur {
+        match error {
             GithubError::RateLimited { reset_at } => assert!(reset_at.is_none()),
-            autre => panic!("erreur inattendue : {autre:?}"),
+            other => panic!("erreur inattendue : {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn une_reponse_429_sans_en_tete_est_une_limite_d_appels() {
-        let erreur = appel(
+    async fn a_429_without_headers_is_a_rate_limit() {
+        let error = call(
             "429 Too Many Requests",
             &[],
             r#"{"message":"Too many requests"}"#,
         )
         .await
         .expect_err("erreur attendue");
-        match erreur {
+        match error {
             GithubError::RateLimited { reset_at } => assert!(reset_at.is_none()),
-            autre => panic!("erreur inattendue : {autre:?}"),
+            other => panic!("erreur inattendue : {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn une_reponse_403_avec_solde_epuise_est_une_limite_d_appels() {
+    async fn a_403_with_an_exhausted_remaining_is_a_rate_limit() {
         // 1 788 084 720 = 2026-08-30T10:12:00Z
-        let erreur = appel(
+        let error = call(
             "403 Forbidden",
             &[
                 ("x-ratelimit-remaining", "0"),
@@ -505,70 +504,70 @@ mod tests {
         )
         .await
         .expect_err("erreur attendue");
-        match erreur {
+        match error {
             GithubError::RateLimited { reset_at } => assert_eq!(
                 reset_at.expect("heure de reprise").to_rfc3339(),
                 "2026-08-30T10:12:00+00:00"
             ),
-            autre => panic!("erreur inattendue : {autre:?}"),
+            other => panic!("erreur inattendue : {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn une_reponse_403_avec_retry_after_est_une_limite_d_appels_secondaire() {
+    async fn a_403_with_retry_after_is_a_secondary_rate_limit() {
         let avant = Utc::now();
-        let erreur = appel(
+        let error = call(
             "403 Forbidden",
             &[("retry-after", "30")],
             r#"{"message":"You have exceeded a secondary rate limit"}"#,
         )
         .await
         .expect_err("erreur attendue");
-        match erreur {
+        match error {
             GithubError::RateLimited { reset_at } => {
                 assert!(reset_at.expect("heure de reprise") > avant);
             }
-            autre => panic!("erreur inattendue : {autre:?}"),
+            other => panic!("erreur inattendue : {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn un_corps_tronque_est_une_reponse_illisible() {
-        let erreur = appel("200 OK", &[], r#"{"data":{"search":{"nodes":["#)
+    async fn a_truncated_body_is_an_unreadable_response() {
+        let error = call("200 OK", &[], r#"{"data":{"search":{"nodes":["#)
             .await
             .expect_err("erreur attendue");
-        assert!(matches!(erreur, GithubError::Malformed));
+        assert!(matches!(error, GithubError::Malformed));
     }
 
     #[tokio::test]
-    async fn une_reponse_5xx_rapporte_son_code() {
-        let erreur = appel("502 Bad Gateway", &[], "")
+    async fn a_5xx_response_reports_its_code() {
+        let error = call("502 Bad Gateway", &[], "")
             .await
             .expect_err("erreur attendue");
-        assert_eq!(erreur.to_string(), "GitHub a répondu 502.");
+        assert_eq!(error.to_string(), "GitHub responded 502.");
     }
 
     #[tokio::test]
-    async fn des_donnees_nulles_sans_erreur_sont_une_reponse_illisible() {
-        let erreur = appel("200 OK", &[], r#"{"data":null}"#)
+    async fn null_data_without_errors_is_an_unreadable_response() {
+        let error = call("200 OK", &[], r#"{"data":null}"#)
             .await
             .expect_err("erreur attendue");
-        assert!(matches!(erreur, GithubError::Malformed));
+        assert!(matches!(error, GithubError::Malformed));
     }
 
     #[tokio::test]
-    async fn une_liste_sans_solde_d_appels_ne_porte_aucun_solde() {
-        let corps = r#"{"data":{"search":{"nodes":[]}}}"#;
-        let page = appel("200 OK", &[], corps).await.expect("succès attendu");
+    async fn a_list_without_a_rate_limit_carries_none() {
+        let body = r#"{"data":{"search":{"nodes":[]}}}"#;
+        let page = call("200 OK", &[], body).await.expect("succès attendu");
         assert!(page.rate_limit.is_none());
     }
 
     #[tokio::test]
-    async fn le_client_ramene_le_detail_d_une_pull_request() {
+    async fn the_client_fetches_the_detail_of_a_pull_request() {
         const DETAIL: &str = include_str!("../../tests/fixtures/detail.json");
-        let point = serveur("200 OK", &[], DETAIL).await;
-        let client = Client::with_endpoint("jeton-de-test", &point).expect("client construit");
-        let resume = crate::model::PrSummary {
+        let endpoint = server("200 OK", &[], DETAIL).await;
+        let client = Client::with_endpoint("jeton-de-test", &endpoint).expect("client construit");
+        let summary = crate::model::PrSummary {
             key: crate::model::PrKey {
                 repo: "moi/owl".to_string(),
                 number: 42,
@@ -580,6 +579,7 @@ mod tests {
             checks: crate::model::ChecksState::Success,
             review: crate::model::ReviewState::Approved,
             mergeable: crate::model::MergeableState::Mergeable,
+            base_ref: "develop".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: crate::model::RepoMergeRules {
                 squash: true,
@@ -589,17 +589,17 @@ mod tests {
             },
         };
 
-        let detail = client.fetch_detail(&resume).await.expect("succès attendu");
+        let detail = client.fetch_detail(&summary).await.expect("succès attendu");
         assert_eq!(detail.node_id, "PR_kwDOABCD12345");
         assert_eq!(detail.checks.len(), 5);
-        assert_eq!(detail.summary, resume);
+        assert_eq!(detail.summary, summary);
     }
 
     #[tokio::test]
-    async fn une_pull_request_absente_de_la_reponse_est_introuvable() {
-        let point = serveur("200 OK", &[], r#"{"data":{"repository":null}}"#).await;
-        let client = Client::with_endpoint("jeton-de-test", &point).expect("client construit");
-        let resume = crate::model::PrSummary {
+    async fn a_pull_request_missing_from_the_response_is_not_found() {
+        let endpoint = server("200 OK", &[], r#"{"data":{"repository":null}}"#).await;
+        let client = Client::with_endpoint("jeton-de-test", &endpoint).expect("client construit");
+        let summary = crate::model::PrSummary {
             key: crate::model::PrKey {
                 repo: "moi/owl".to_string(),
                 number: 1,
@@ -611,6 +611,7 @@ mod tests {
             checks: crate::model::ChecksState::None,
             review: crate::model::ReviewState::None,
             mergeable: crate::model::MergeableState::Unknown,
+            base_ref: "develop".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: crate::model::RepoMergeRules {
                 squash: true,
@@ -619,16 +620,16 @@ mod tests {
                 delete_branch_on_merge: false,
             },
         };
-        let erreur = client
-            .fetch_detail(&resume)
+        let error = client
+            .fetch_detail(&summary)
             .await
             .expect_err("erreur attendue");
-        assert!(matches!(erreur, GithubError::NotFound));
+        assert!(matches!(error, GithubError::NotFound));
     }
 
     /// Résumé minimal pour viser la mutation : seule la clé est lue quand
     /// l'identifiant GraphQL est déjà connu.
-    fn resume_de_test() -> PrSummary {
+    fn test_summary() -> PrSummary {
         use crate::model::{ChecksState, MergeableState, PrKey, RepoMergeRules, ReviewState};
         PrSummary {
             key: PrKey {
@@ -642,6 +643,7 @@ mod tests {
             checks: ChecksState::Success,
             review: ReviewState::Approved,
             mergeable: MergeableState::Mergeable,
+            base_ref: "develop".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: RepoMergeRules {
                 squash: true,
@@ -653,32 +655,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn une_fusion_reussie_ne_rend_rien() {
-        let corps =
+    async fn a_successful_merge_returns_nothing() {
+        let body =
             r#"{"data":{"mergePullRequest":{"pullRequest":{"number":142,"state":"MERGED"}}}}"#;
-        let adresse = serveur("200 OK", &[], corps).await;
-        let client = Client::with_endpoint("jeton", &adresse).expect("client construit");
+        let address = server("200 OK", &[], body).await;
+        let client = Client::with_endpoint("jeton", &address).expect("client construit");
 
-        let resultat = client
+        let result = client
             .merge_pull_request(
-                &resume_de_test(),
+                &test_summary(),
                 Some("PR_identifiant".to_string()),
                 MergeMethod::Squash,
             )
             .await;
 
-        assert!(resultat.is_ok(), "{resultat:?}");
+        assert!(result.is_ok(), "{result:?}");
     }
 
     #[tokio::test]
-    async fn une_fusion_refusee_rend_le_message_de_github_tel_quel() {
-        let corps = r#"{"data":null,"errors":[{"message":"At least 1 approving review is required by reviewers with write access."}]}"#;
-        let adresse = serveur("200 OK", &[], corps).await;
-        let client = Client::with_endpoint("jeton", &adresse).expect("client construit");
+    async fn a_refused_merge_returns_the_github_message_verbatim() {
+        let body = r#"{"data":null,"errors":[{"message":"At least 1 approving review is required by reviewers with write access."}]}"#;
+        let address = server("200 OK", &[], body).await;
+        let client = Client::with_endpoint("jeton", &address).expect("client construit");
 
-        let erreur = client
+        let error = client
             .merge_pull_request(
-                &resume_de_test(),
+                &test_summary(),
                 Some("PR_identifiant".to_string()),
                 MergeMethod::Squash,
             )
@@ -686,45 +688,45 @@ mod tests {
             .expect_err("la mutation doit échouer");
 
         assert_eq!(
-            erreur.to_string(),
+            error.to_string(),
             "At least 1 approving review is required by reviewers with write access."
         );
     }
 
     #[tokio::test]
-    async fn sans_identifiant_le_detail_est_demande_avant_la_mutation() {
+    async fn without_the_id_the_detail_is_fetched_before_the_mutation() {
         const DETAIL: &str = include_str!("../../tests/fixtures/detail.json");
         const MUTATION: &str =
             r#"{"data":{"mergePullRequest":{"pullRequest":{"number":142,"state":"MERGED"}}}}"#;
-        let (adresse, mut requetes) = serveur_enchaine(&[DETAIL, MUTATION]).await;
-        let client = Client::with_endpoint("jeton", &adresse).expect("client construit");
+        let (address, mut queries) = chained_server(&[DETAIL, MUTATION]).await;
+        let client = Client::with_endpoint("jeton", &address).expect("client construit");
 
-        let resultat = client
-            .merge_pull_request(&resume_de_test(), None, MergeMethod::Squash)
+        let result = client
+            .merge_pull_request(&test_summary(), None, MergeMethod::Squash)
             .await;
 
-        assert!(resultat.is_ok(), "{resultat:?}");
+        assert!(result.is_ok(), "{result:?}");
 
-        let premiere = requetes
+        let first_one = queries
             .recv()
             .await
             .expect("la requête de détail doit être envoyée");
         assert!(
-            premiere.contains("query Detail"),
-            "la première requête doit être le détail : {premiere}"
+            first_one.contains("query Detail"),
+            "la première requête doit être le détail : {first_one}"
         );
 
-        let seconde = requetes
+        let second_one = queries
             .recv()
             .await
             .expect("la requête de mutation doit être envoyée");
         assert!(
-            seconde.contains("mutation Merge"),
-            "la seconde requête doit être la mutation : {seconde}"
+            second_one.contains("mutation Merge"),
+            "la seconde requête doit être la mutation : {second_one}"
         );
         assert!(
-            seconde.contains("PR_kwDOABCD12345"),
-            "la mutation doit utiliser l'identifiant renvoyé par le détail : {seconde}"
+            second_one.contains("PR_kwDOABCD12345"),
+            "la mutation doit utiliser l'identifiant renvoyé par le détail : {second_one}"
         );
     }
 }

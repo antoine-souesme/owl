@@ -7,9 +7,11 @@
 
 mod render;
 
-pub use render::{ListRender, ListRow, MergeRender, Tone};
+pub use render::{
+    ListRender, ListRow, MergeRender, Tone, DETAIL_TITLE, LIST_TITLE, SELECTION_MARKER,
+};
 
-use render::tronquer;
+use render::truncate;
 
 use std::collections::HashMap;
 
@@ -117,25 +119,23 @@ pub struct Loading {
 }
 
 /// Aide clavier, en fin de barre d'état. Le texte est ici, pas dans `ui`.
-const AIDE_LISTE: &str =
-    "↑↓ naviguer · → détail · m fusionner · r rafraîchir · o navigateur · q quitter";
-const AIDE_DETAIL: &str =
-    "↑↓ défiler · ← liste · m fusionner · r rafraîchir · o navigateur · q quitter";
-const AIDE_FUSION: &str = "↑↓ choisir · Entrée confirmer · Échap annuler";
+const HELP_LIST: &str = "↑↓ move · → details · m merge · r refresh · o browser · q quit";
+const HELP_DETAIL: &str = "↑↓ scroll · ← list · m merge · r refresh · o browser · q quit";
+const HELP_MERGE: &str = "↑↓ choose · Enter confirm · Esc cancel";
 
 /// Message affiché tant qu'aucune réponse n'est arrivée.
-const ATTENTE_INITIALE: &str = "Chargement…";
+const INITIAL_WAIT: &str = "Loading…";
 
-const REFUS_BROUILLON: &str = "Pull request en brouillon, elle doit être publiée.";
-const REFUS_CONFLITS: &str = "Conflits à résoudre.";
-const REFUS_ETAT_INCONNU: &str = "État de fusion en cours de calcul, réessaie dans un instant.";
-const REFUS_AUCUNE_METHODE: &str = "Aucune méthode de fusion autorisée sur ce dépôt.";
-const REFUS_DISPARUE: &str = "Pull request introuvable.";
+const DENIED_DRAFT: &str = "This pull request is a draft, it must be published first.";
+const DENIED_CONFLICTS: &str = "Conflicts to resolve.";
+const DENIED_UNKNOWN_STATE: &str = "Merge state being computed, try again in a moment.";
+const DENIED_NO_METHOD: &str = "No merge method allowed on this repository.";
+const DENIED_GONE: &str = "Pull request not found.";
 
 /// Attente imposée quand GitHub refuse pour limite d'appels sans donner
 /// d'heure de reprise — le cas des limites secondaires sans `retry-after`.
 /// Une minute suffit à casser la boucle de réessais, que la spec interdit.
-const REPRISE_INCONNUE: i64 = 60;
+const UNKNOWN_RESET: i64 = 60;
 
 /// Vue affichée. Le défilement voyage avec la vue : revenir à la liste puis
 /// rouvrir un détail le remet en haut, ce qui est le comportement attendu.
@@ -240,7 +240,7 @@ impl App {
             filters: config
                 .filters
                 .iter()
-                .map(|texte| Filter::parse(texte))
+                .map(|text| Filter::parse(text))
                 .collect(),
             config,
         }
@@ -258,7 +258,7 @@ impl App {
 
     pub fn handle(&mut self, event: Event) -> Vec<Command> {
         match event {
-            Event::Key(touche) => self.handle_key(touche),
+            Event::Key(key_pressed) => self.handle_key(key_pressed),
             Event::Quit => {
                 self.should_quit = true;
                 vec![Command::Quit]
@@ -293,7 +293,7 @@ impl App {
                         self.note_rate_limit();
                     }
                     // Message de GitHub repris tel quel, et liste conservée.
-                    Err(erreur) => self.note_error(erreur),
+                    Err(error) => self.note_error(error),
                 }
                 Vec::new()
             }
@@ -317,30 +317,40 @@ impl App {
                         );
                         self.error = None;
                     }
-                    Err(erreur) => self.note_error(erreur),
+                    Err(error) => self.note_error(error),
                 }
-                self.borner_le_defilement();
+                self.clamp_scroll();
                 Vec::new()
             }
             Event::MergeFinished { key, result } => {
                 // Réponse qui ne concerne pas la fenêtre ouverte : ignorée.
-                if self.merge.as_ref().map(|fenetre| &fenetre.key) != Some(&key) {
+                if self.merge.as_ref().map(|dialog| &dialog.key) != Some(&key) {
                     return Vec::new();
                 }
                 match result {
                     Ok(()) => {
                         self.merge = None;
-                        self.notice = Some(format!("{} #{} fusionnée", key.repo, key.number));
-                        // La liste est redemandée tout de suite : la PR en
-                        // disparaîtra, et la sélection suit la règle du
-                        // rafraîchissement.
+                        self.notice = Some(format!("{} #{} merged", key.repo, key.number));
+                        // La PR fusionnée quitte la liste immédiatement, sans
+                        // attendre la réponse : l'index de recherche de GitHub
+                        // met un instant à l'oublier, et la revoir après une
+                        // fusion réussie ferait douter du résultat.
+                        let rest: Vec<PrSummary> = self
+                            .prs
+                            .iter()
+                            .filter(|pr| pr.key != key)
+                            .cloned()
+                            .collect();
+                        self.apply_list(rest);
+                        // La liste est tout de même redemandée : elle porte le
+                        // solde d'appels et les mises à jour des autres PR.
                         vec![self.fetch_list()]
                     }
                     // Message de GitHub tel quel : il dit quoi faire mieux
                     // qu'un message maison.
-                    Err(erreur) => {
-                        if let Some(fenetre) = self.merge.as_mut() {
-                            fenetre.state = MergeDialogState::Failed(erreur.to_string());
+                    Err(error) => {
+                        if let Some(dialog) = self.merge.as_mut() {
+                            dialog.state = MergeDialogState::Failed(error.to_string());
                         }
                         Vec::new()
                     }
@@ -349,25 +359,25 @@ impl App {
         }
     }
 
-    fn handle_key(&mut self, touche: Key) -> Vec<Command> {
+    fn handle_key(&mut self, key_pressed: Key) -> Vec<Command> {
         // Ctrl-C avant tout, fenêtre ouverte comprise : le mode brut l'a
         // désarmée, et c'est à `owl` de l'honorer. Sans quoi la seule sortie
         // serait de tuer le terminal.
-        if touche == Key::CtrlC {
+        if key_pressed == Key::CtrlC {
             self.should_quit = true;
             return vec![Command::Quit];
         }
 
         // La fenêtre de fusion capte tout le reste du clavier.
         if self.merge.is_some() {
-            return self.handle_key_merge(touche);
+            return self.handle_key_merge(key_pressed);
         }
 
         // Un message posé par `owl` ne survit pas à la touche suivante.
         self.notice = None;
 
         // Touches communes aux deux vues, traitées avant l'aiguillage.
-        match touche {
+        match key_pressed {
             Key::Char('q') => {
                 self.should_quit = true;
                 return vec![Command::Quit];
@@ -379,52 +389,52 @@ impl App {
         }
 
         match self.view {
-            View::List => self.handle_key_list(touche),
-            View::Detail { .. } => self.handle_key_detail(touche),
+            View::List => self.handle_key_list(key_pressed),
+            View::Detail { .. } => self.handle_key_detail(key_pressed),
         }
     }
 
     /// Ce que la touche demande à la fenêtre.
-    fn handle_key_merge(&mut self, touche: Key) -> Vec<Command> {
+    fn handle_key_merge(&mut self, key_pressed: Key) -> Vec<Command> {
         /// Décision prise pendant l'emprunt de la fenêtre, appliquée après.
-        enum Suite {
-            Rien,
-            Fermer,
-            Confirmer,
+        enum Outcome {
+            Nothing,
+            Close,
+            Confirm,
         }
 
-        let Some(fenetre) = self.merge.as_mut() else {
+        let Some(dialog) = self.merge.as_mut() else {
             return Vec::new();
         };
 
-        let suite = match (&fenetre.state, touche) {
+        let outcome = match (&dialog.state, key_pressed) {
             (MergeDialogState::Choosing, Key::Up) => {
                 // La sélection ne boucle pas, comme celle de la liste.
-                fenetre.selected = fenetre.selected.saturating_sub(1);
-                Suite::Rien
+                dialog.selected = dialog.selected.saturating_sub(1);
+                Outcome::Nothing
             }
             (MergeDialogState::Choosing, Key::Down) => {
-                if fenetre.selected + 1 < fenetre.methods.len() {
-                    fenetre.selected += 1;
+                if dialog.selected + 1 < dialog.methods.len() {
+                    dialog.selected += 1;
                 }
-                Suite::Rien
+                Outcome::Nothing
             }
-            (MergeDialogState::Choosing | MergeDialogState::Failed(_), Key::Esc) => Suite::Fermer,
+            (MergeDialogState::Choosing | MergeDialogState::Failed(_), Key::Esc) => Outcome::Close,
             (MergeDialogState::Choosing | MergeDialogState::Failed(_), Key::Enter) => {
-                Suite::Confirmer
+                Outcome::Confirm
             }
             // `Submitting` n'accepte rien : l'appel est parti, et fermer la
             // fenêtre laisserait croire que la fusion est annulée.
-            _ => Suite::Rien,
+            _ => Outcome::Nothing,
         };
 
-        match suite {
-            Suite::Rien => Vec::new(),
-            Suite::Fermer => {
+        match outcome {
+            Outcome::Nothing => Vec::new(),
+            Outcome::Close => {
                 self.merge = None;
                 Vec::new()
             }
-            Suite::Confirmer => self.submit_merge(),
+            Outcome::Confirm => self.submit_merge(),
         }
     }
 
@@ -433,41 +443,41 @@ impl App {
     /// La fenêtre ne se ferme pas : elle passe en `Submitting` et le dit.
     /// La fermer pendant l'appel donnerait l'impression que c'est fini.
     fn submit_merge(&mut self) -> Vec<Command> {
-        let Some(fenetre) = self.merge.as_ref() else {
+        let Some(dialog) = self.merge.as_ref() else {
             return Vec::new();
         };
-        let cle = fenetre.key.clone();
-        let Some(methode) = fenetre.method() else {
+        let key = dialog.key.clone();
+        let Some(method) = dialog.method() else {
             return Vec::new();
         };
-        let Some(resume) = self.resume_affiche(&cle).cloned() else {
+        let Some(summary) = self.displayed_summary(&key).cloned() else {
             // La pull request a disparu de la liste et du cache entre
             // l'ouverture de la fenêtre et la confirmation. Sans ce message,
             // `Entrée` semblerait ne rien faire.
             self.merge = None;
-            self.notice = Some(REFUS_DISPARUE.to_string());
+            self.notice = Some(DENIED_GONE.to_string());
             return Vec::new();
         };
         // Le détail en cache porte l'identifiant GraphQL. Sans lui, `github`
         // fera la requête de détail avant la mutation.
         let node_id = self
             .details
-            .get(&cle)
+            .get(&key)
             .map(|cache| cache.detail.node_id.clone());
 
-        if let Some(fenetre) = self.merge.as_mut() {
-            fenetre.state = MergeDialogState::Submitting;
+        if let Some(dialog) = self.merge.as_mut() {
+            dialog.state = MergeDialogState::Submitting;
         }
 
         vec![Command::Merge {
-            summary: resume,
+            summary,
             node_id,
-            method: methode,
+            method,
         }]
     }
 
-    fn handle_key_list(&mut self, touche: Key) -> Vec<Command> {
-        match touche {
+    fn handle_key_list(&mut self, key_pressed: Key) -> Vec<Command> {
+        match key_pressed {
             Key::Up | Key::Char('k') => self.select_previous(),
             Key::Down | Key::Char('j') => self.select_next(),
             Key::Right | Key::Enter => return self.open_detail(),
@@ -476,8 +486,8 @@ impl App {
         Vec::new()
     }
 
-    fn handle_key_detail(&mut self, touche: Key) -> Vec<Command> {
-        match touche {
+    fn handle_key_detail(&mut self, key_pressed: Key) -> Vec<Command> {
+        match key_pressed {
             Key::Up | Key::Char('k') => self.scroll_detail(-1),
             Key::Down | Key::Char('j') => self.scroll_detail(1),
             Key::Left | Key::Esc => self.view = View::List,
@@ -499,9 +509,9 @@ impl App {
         match &self.view {
             View::List => vec![self.fetch_list()],
             View::Detail { key, .. } => {
-                let cle = key.clone();
-                match self.resume_affiche(&cle).cloned() {
-                    Some(resume) => vec![self.fetch_detail(resume)],
+                let key = key.clone();
+                match self.displayed_summary(&key).cloned() {
+                    Some(summary) => vec![self.fetch_detail(summary)],
                     // Ni dans la liste, ni en cache : rien à recharger.
                     None => Vec::new(),
                 }
@@ -512,17 +522,17 @@ impl App {
     /// Ouvre le détail de la sélection. Une PR déjà consultée pendant la
     /// session s'affiche depuis le cache, sans nouvelle requête.
     fn open_detail(&mut self) -> Vec<Command> {
-        let Some(resume) = self.selected_pr().cloned() else {
+        let Some(summary) = self.selected_pr().cloned() else {
             return Vec::new();
         };
         self.view = View::Detail {
-            key: resume.key.clone(),
+            key: summary.key.clone(),
             scroll: 0,
         };
-        if self.details.contains_key(&resume.key) {
+        if self.details.contains_key(&summary.key) {
             return Vec::new();
         }
-        vec![self.fetch_detail(resume)]
+        vec![self.fetch_detail(summary)]
     }
 
     /// Résumé de la pull request d'une clé donnée : celui de la liste, ou à
@@ -531,7 +541,7 @@ impl App {
     /// Le repli n'est pas un détail d'affichage : quand un rafraîchissement
     /// retire la PR alors que son détail reste ouvert, c'est la seule source
     /// du résumé, et `o` comme `r` en ont besoin autant que le dessin.
-    pub(crate) fn resume_affiche(&self, key: &PrKey) -> Option<&PrSummary> {
+    pub(crate) fn displayed_summary(&self, key: &PrKey) -> Option<&PrSummary> {
         self.prs
             .iter()
             .find(|pr| &pr.key == key)
@@ -540,17 +550,17 @@ impl App {
 
     /// Pull request visée par une action : la sélection dans la liste, la PR
     /// ouverte dans le détail.
-    pub(crate) fn pr_affichee(&self) -> Option<&PrSummary> {
+    pub(crate) fn displayed_pr(&self) -> Option<&PrSummary> {
         match &self.view {
             View::List => self.selected_pr(),
-            View::Detail { key, .. } => self.resume_affiche(key),
+            View::Detail { key, .. } => self.displayed_summary(key),
         }
     }
 
     /// URL de la pull request affichée : la sélection dans la liste, la PR
     /// ouverte dans le détail.
     fn open_in_browser(&self) -> Vec<Command> {
-        match self.pr_affichee() {
+        match self.displayed_pr() {
             Some(pr) => vec![Command::OpenInBrowser {
                 url: pr.url.clone(),
             }],
@@ -564,40 +574,40 @@ impl App {
     /// les protections de branche sont l'affaire de GitHub, qui les applique
     /// lui-même. Dupliquer cette logique produirait des désaccords.
     fn open_merge(&mut self) -> Vec<Command> {
-        let Some(resume) = self.pr_affichee().cloned() else {
+        let Some(summary) = self.displayed_pr().cloned() else {
             return Vec::new();
         };
-        let motif = if resume.is_draft {
-            Some(REFUS_BROUILLON)
+        let reason = if summary.is_draft {
+            Some(DENIED_DRAFT)
         } else {
-            match resume.mergeable {
-                MergeableState::Conflicting => Some(REFUS_CONFLITS),
-                MergeableState::Unknown => Some(REFUS_ETAT_INCONNU),
+            match summary.mergeable {
+                MergeableState::Conflicting => Some(DENIED_CONFLICTS),
+                MergeableState::Unknown => Some(DENIED_UNKNOWN_STATE),
                 MergeableState::Mergeable => None,
             }
         };
-        if let Some(message) = motif {
+        if let Some(message) = reason {
             self.notice = Some(message.to_string());
             return Vec::new();
         }
 
-        let methodes = resume.repo_rules.allowed();
-        if methodes.is_empty() {
-            self.notice = Some(REFUS_AUCUNE_METHODE.to_string());
+        let methods = summary.repo_rules.allowed();
+        if methods.is_empty() {
+            self.notice = Some(DENIED_NO_METHOD.to_string());
             return Vec::new();
         }
 
         // La méthode préférée si le dépôt l'autorise, sinon la première de la
         // liste — donc l'écrasement, puis le rebasage, puis le commit de fusion.
-        let selected = methodes
+        let selected = methods
             .iter()
-            .position(|methode| *methode == self.config.preferred_merge_method)
+            .position(|method| *method == self.config.preferred_merge_method)
             .unwrap_or(0);
 
         self.merge = Some(MergeDialog {
-            key: resume.key.clone(),
-            title: resume.title.clone(),
-            methods: methodes,
+            key: summary.key.clone(),
+            title: summary.title.clone(),
+            methods,
             selected,
             state: MergeDialogState::Choosing,
         });
@@ -621,29 +631,29 @@ impl App {
         }
     }
 
-    /// Défile de `pas` lignes, borné au contenu. La hauteur de la zone n'est
+    /// Défile de `step` lignes, borné au contenu. La hauteur de la zone n'est
     /// pas connue ici : la dernière ligne reste atteignable, et le dessin ne
     /// peut de toute façon pas défiler au-delà.
-    fn scroll_detail(&mut self, pas: i32) {
-        let maximum = i64::from(self.derniere_ligne_du_detail());
+    fn scroll_detail(&mut self, step: i32) {
+        let maximum = i64::from(self.last_detail_line());
         if let View::Detail { scroll, .. } = &mut self.view {
-            let vise = i64::from(*scroll) + i64::from(pas);
-            *scroll = vise.clamp(0, maximum) as u16;
+            let target = i64::from(*scroll) + i64::from(step);
+            *scroll = target.clamp(0, maximum) as u16;
         }
     }
 
     /// Indice de la dernière ligne du détail, saturé plutôt que tronqué : un
     /// détail de plus de 65 536 lignes ne doit pas ramener le défilement en
     /// haut de page.
-    fn derniere_ligne_du_detail(&self) -> u16 {
+    fn last_detail_line(&self) -> u16 {
         u16::try_from(self.detail_line_count().saturating_sub(1)).unwrap_or(u16::MAX)
     }
 
     /// Re-borne le défilement au contenu. Un détail rechargé peut être plus
     /// court que le précédent : sans cela, l'écran resterait vide jusqu'à ce
     /// que l'utilisateur remonte.
-    fn borner_le_defilement(&mut self) {
-        let maximum = self.derniere_ligne_du_detail();
+    fn clamp_scroll(&mut self) {
+        let maximum = self.last_detail_line();
         if let View::Detail { scroll, .. } = &mut self.view {
             *scroll = (*scroll).min(maximum);
         }
@@ -656,15 +666,15 @@ impl App {
     /// qui garde le curseur au même endroit de l'écran plutôt que de le
     /// renvoyer en tête à chaque fusion.
     fn apply_list(&mut self, prs: Vec<PrSummary>) {
-        let precedent = self.selected;
+        let previous = self.selected;
         self.prs = prs;
         self.selected = match &self.selected_key {
-            Some(cle) => self
+            Some(key) => self
                 .prs
                 .iter()
-                .position(|pr| &pr.key == cle)
-                .unwrap_or(precedent),
-            None => precedent,
+                .position(|pr| &pr.key == key)
+                .unwrap_or(previous),
+            None => previous,
         };
         self.selected = self.selected.min(self.prs.len().saturating_sub(1));
         self.remember_selection();
@@ -691,9 +701,9 @@ impl App {
 
     /// Suspend le rafraîchissement quand le solde rapporté est épuisé.
     fn note_rate_limit(&mut self) {
-        if let Some(limite) = &self.rate_limit {
-            if limite.remaining == 0 {
-                self.suspended_until = Some(limite.reset_at.with_timezone(&Local));
+        if let Some(limit) = &self.rate_limit {
+            if limit.remaining == 0 {
+                self.suspended_until = Some(limit.reset_at.with_timezone(&Local));
             }
         }
     }
@@ -701,22 +711,22 @@ impl App {
     /// Retient une erreur de requête. Un refus pour limite d'appels ne laisse
     /// pas de message d'erreur : il suspend le rafraîchissement, et la barre
     /// d'état l'annonce avec l'heure de reprise.
-    fn note_error(&mut self, erreur: GithubError) {
-        match erreur {
+    fn note_error(&mut self, error: GithubError) {
+        match error {
             GithubError::RateLimited { reset_at } => {
-                let reprise = reset_at
-                    .map(|heure| heure.with_timezone(&Local))
-                    .unwrap_or_else(|| Local::now() + Duration::seconds(REPRISE_INCONNUE));
-                self.suspended_until = Some(reprise);
+                let resume_at = reset_at
+                    .map(|time| time.with_timezone(&Local))
+                    .unwrap_or_else(|| Local::now() + Duration::seconds(UNKNOWN_RESET));
+                self.suspended_until = Some(resume_at);
             }
-            autre => self.error = Some(autre.to_string()),
+            other => self.error = Some(other.to_string()),
         }
     }
 
     /// Heure de reprise si la suspension court encore. Rend `None` dès que
     /// l'heure est passée : la suspension s'éteint sans que rien la lève.
     fn suspension(&self) -> Option<DateTime<Local>> {
-        self.suspended_until.filter(|heure| *heure > Local::now())
+        self.suspended_until.filter(|time| *time > Local::now())
     }
 
     /// Ouvre une nouvelle génération et demande la liste.
@@ -747,13 +757,13 @@ impl App {
     /// un morceau.
     pub fn status_line(&self, width: u16) -> String {
         // Rangs de sacrifice, du plus retenu au premier lâché.
-        const ERREUR: u8 = 0;
-        const CHARGEMENT: u8 = 1;
-        const RESUME: u8 = 2;
-        const HEURE: u8 = 3;
-        const AIDE: u8 = 4;
+        const ERROR: u8 = 0;
+        const LOADING: u8 = 1;
+        const SUMMARY: u8 = 2;
+        const TIME: u8 = 3;
+        const HELP: u8 = 4;
 
-        let mut morceaux: Vec<(u8, String)> = Vec::new();
+        let mut parts: Vec<(u8, String)> = Vec::new();
 
         if self.last_refresh.is_none()
             && self.error.is_none()
@@ -761,85 +771,85 @@ impl App {
             && self.suspension().is_none()
         {
             // Rien n'est encore arrivé : l'attente est le message principal.
-            morceaux.push((ERREUR, ATTENTE_INITIALE.to_string()));
+            parts.push((ERROR, INITIAL_WAIT.to_string()));
         } else {
             if self.last_refresh.is_some() {
-                morceaux.push((RESUME, self.liste_resumee()));
+                parts.push((SUMMARY, self.list_summary()));
             }
-            if let Some(instant) = self.last_refresh {
-                morceaux.push((HEURE, format!("mis à jour à {}", instant.format("%H:%M"))));
+            if let Some(at) = self.last_refresh {
+                parts.push((TIME, format!("updated at {}", at.format("%H:%M"))));
             }
             if self.loading.list || self.loading.detail {
-                morceaux.push((CHARGEMENT, "chargement…".to_string()));
+                parts.push((LOADING, "loading…".to_string()));
             }
-            if let Some(erreur) = &self.error {
-                morceaux.push((ERREUR, erreur.clone()));
+            if let Some(error) = &self.error {
+                parts.push((ERROR, error.clone()));
             }
         }
 
         // Message de `owl` lui-même : motif de refus, ou fusion réussie. Au
         // même rang que l'erreur : il ne doit pas être sacrifié à la place.
         if let Some(message) = &self.notice {
-            morceaux.push((ERREUR, message.clone()));
+            parts.push((ERROR, message.clone()));
         }
 
         // Suspension pour limite d'appels : au même rang que l'erreur, elle
         // dit pourquoi la liste ne se rafraîchit plus.
-        if let Some(reprise) = self.suspension() {
-            morceaux.push((ERREUR, message_de_suspension(reprise)));
+        if let Some(resume_at) = self.suspension() {
+            parts.push((ERROR, suspension_message(resume_at)));
         }
 
-        morceaux.push((
-            AIDE,
+        parts.push((
+            HELP,
             if self.merge.is_some() {
-                AIDE_FUSION.to_string()
+                HELP_MERGE.to_string()
             } else {
                 match self.view {
-                    View::List => AIDE_LISTE,
-                    View::Detail { .. } => AIDE_DETAIL,
+                    View::List => HELP_LIST,
+                    View::Detail { .. } => HELP_DETAIL,
                 }
                 .to_string()
             },
         ));
 
-        let largeur = width as usize;
-        while morceaux.len() > 1 && assembler(&morceaux).chars().count() > largeur {
-            let sacrifie = morceaux
+        let width = width as usize;
+        while parts.len() > 1 && assemble(&parts).chars().count() > width {
+            let dropped = parts
                 .iter()
                 .enumerate()
-                .max_by_key(|(_, (rang, _))| *rang)
-                .map(|(indice, _)| indice)
+                .max_by_key(|(_, (rank, _))| *rank)
+                .map(|(index, _)| index)
                 .expect("la liste n'est pas vide");
-            morceaux.remove(sacrifie);
+            parts.remove(dropped);
         }
-        tronquer(&assembler(&morceaux), largeur)
+        truncate(&assemble(&parts), width)
     }
 
     /// Résumé de la liste pour la barre d'état, jamais tronqué autrement que
     /// par le retrait d'un morceau entier.
-    fn liste_resumee(&self) -> String {
+    fn list_summary(&self) -> String {
         match self.prs.len() {
-            0 => "Aucune pull request".to_string(),
+            0 => "No pull requests".to_string(),
             1 => "1 pull request".to_string(),
-            nombre => format!("{nombre} pull requests"),
+            count => format!("{count} pull requests"),
         }
     }
 }
 
 /// Assemble les morceaux retenus de la barre d'état, dans l'ordre d'affichage.
-fn assembler(morceaux: &[(u8, String)]) -> String {
-    morceaux
+fn assemble(parts: &[(u8, String)]) -> String {
+    parts
         .iter()
-        .map(|(_, texte)| texte.as_str())
+        .map(|(_, text)| text.as_str())
         .collect::<Vec<_>>()
         .join(" · ")
 }
 
 /// Annonce de suspension pour limite d'appels, avec son heure de reprise.
-fn message_de_suspension(reprise: DateTime<Local>) -> String {
+fn suspension_message(resume_at: DateTime<Local>) -> String {
     format!(
-        "limite d'appels atteinte, reprise à {}",
-        reprise.format("%H h %M")
+        "rate limit reached, resuming at {}",
+        resume_at.format("%H:%M")
     )
 }
 
@@ -853,21 +863,22 @@ pub(crate) mod tests {
     };
 
     /// Largeur où la barre d'état tient tout entière, aide comprise.
-    const CONFORTABLE: u16 = 200;
+    const ROOMY: u16 = 200;
 
-    pub(crate) fn pr(numero: u32) -> PrSummary {
+    pub(crate) fn pr(number: u32) -> PrSummary {
         PrSummary {
             key: PrKey {
                 repo: "moi/depot".to_string(),
-                number: numero,
+                number: number,
             },
-            title: format!("Titre {numero}"),
+            title: format!("Titre {number}"),
             author: "moi".to_string(),
-            url: format!("https://github.com/moi/depot/pull/{numero}"),
+            url: format!("https://github.com/moi/depot/pull/{number}"),
             is_draft: false,
             checks: ChecksState::Success,
             review: ReviewState::Approved,
             mergeable: MergeableState::Mergeable,
+            base_ref: "develop".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: RepoMergeRules {
                 squash: true,
@@ -888,59 +899,59 @@ pub(crate) mod tests {
     }
 
     /// Application démarrée, première requête émise, génération courante rendue.
-    pub(crate) fn app_demarree() -> (App, Generation) {
+    pub(crate) fn app_started() -> (App, Generation) {
         let mut app = App::new(Config::default());
-        let commandes = app.start();
-        let generation = match &commandes[0] {
+        let commands = app.start();
+        let generation = match &commands[0] {
             Command::FetchList { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         (app, generation)
     }
 
     /// PR d'un dépôt donné, pour distinguer deux clés dans un même test.
-    pub(crate) fn pr_de(depot: &str, numero: u32) -> PrSummary {
+    pub(crate) fn pr_in(repo: &str, number: u32) -> PrSummary {
         PrSummary {
             key: PrKey {
-                repo: depot.to_string(),
-                number: numero,
+                repo: repo.to_string(),
+                number: number,
             },
-            ..pr(numero)
+            ..pr(number)
         }
     }
 
     /// Application démarrée et garnie de la liste donnée.
-    pub(crate) fn app_garnie(liste: Vec<PrSummary>) -> App {
-        let (mut app, generation) = app_demarree();
+    pub(crate) fn app_with(list: Vec<PrSummary>) -> App {
+        let (mut app, generation) = app_started();
         app.handle(Event::ListLoaded {
             generation,
-            result: Ok(page(liste)),
+            result: Ok(page(list)),
         });
         app
     }
 
     /// Rafraîchit et livre la nouvelle liste, en respectant la génération.
-    pub(crate) fn rafraichir(app: &mut App, liste: Vec<PrSummary>) {
+    pub(crate) fn refresh_with(app: &mut App, list: Vec<PrSummary>) {
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::FetchList { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         app.handle(Event::ListLoaded {
             generation,
-            result: Ok(page(liste)),
+            result: Ok(page(list)),
         });
     }
 
     /// PR dont on choisit les règles du dépôt.
-    pub(crate) fn pr_avec_regles(numero: u32, regles: RepoMergeRules) -> PrSummary {
+    pub(crate) fn pr_with_rules(number: u32, rules: RepoMergeRules) -> PrSummary {
         PrSummary {
-            repo_rules: regles,
-            ..pr(numero)
+            repo_rules: rules,
+            ..pr(number)
         }
     }
 
     /// Les trois méthodes autorisées.
-    fn tout_autorise() -> RepoMergeRules {
+    fn all_allowed() -> RepoMergeRules {
         RepoMergeRules {
             squash: true,
             merge: true,
@@ -950,146 +961,146 @@ pub(crate) mod tests {
     }
 
     /// Application garnie d'une seule PR, `m` déjà pressée.
-    fn app_fenetre_ouverte(pr: PrSummary) -> App {
-        let mut app = app_garnie(vec![pr]);
+    fn app_with_dialog(pr: PrSummary) -> App {
+        let mut app = app_with(vec![pr]);
         app.handle(Event::Key(Key::Char('m')));
         app
     }
 
     #[test]
-    fn un_depot_qui_n_autorise_que_l_ecrasement_ne_propose_que_l_ecrasement() {
-        let regles = RepoMergeRules {
+    fn a_repo_allowing_only_squash_offers_only_squash() {
+        let rules = RepoMergeRules {
             squash: true,
             merge: false,
             rebase: false,
             delete_branch_on_merge: true,
         };
-        let app = app_fenetre_ouverte(pr_avec_regles(1, regles));
-        let fenetre = app.merge.as_ref().expect("la fenêtre doit être ouverte");
-        assert_eq!(fenetre.methods, vec![MergeMethod::Squash]);
+        let app = app_with_dialog(pr_with_rules(1, rules));
+        let dialog = app.merge.as_ref().expect("la fenêtre doit être ouverte");
+        assert_eq!(dialog.methods, vec![MergeMethod::Squash]);
     }
 
     #[test]
-    fn un_depot_qui_autorise_tout_propose_tout_avec_la_methode_preferee() {
+    fn a_repo_allowing_everything_offers_everything_with_the_preferred_method() {
         // Construction en une fois : clippy refuse la réaffectation d'un
         // champ juste après `default()`.
-        let reglages = Config {
+        let settings = Config {
             preferred_merge_method: MergeMethod::Rebase,
             ..Config::default()
         };
-        let mut app = App::new(reglages);
+        let mut app = App::new(settings);
         let generation = match &app.start()[0] {
             Command::FetchList { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         app.handle(Event::ListLoaded {
             generation,
-            result: Ok(page(vec![pr_avec_regles(1, tout_autorise())])),
+            result: Ok(page(vec![pr_with_rules(1, all_allowed())])),
         });
         app.handle(Event::Key(Key::Char('m')));
 
-        let fenetre = app.merge.as_ref().expect("la fenêtre doit être ouverte");
+        let dialog = app.merge.as_ref().expect("la fenêtre doit être ouverte");
         assert_eq!(
-            fenetre.methods,
+            dialog.methods,
             vec![MergeMethod::Squash, MergeMethod::Rebase, MergeMethod::Merge]
         );
-        assert_eq!(fenetre.method(), Some(MergeMethod::Rebase));
+        assert_eq!(dialog.method(), Some(MergeMethod::Rebase));
     }
 
     #[test]
-    fn une_methode_preferee_non_autorisee_retombe_sur_la_premiere() {
+    fn a_preferred_method_not_allowed_falls_back_to_the_first() {
         // Réglages par défaut : la méthode préférée est l'écrasement.
-        let regles = RepoMergeRules {
+        let rules = RepoMergeRules {
             squash: false,
             merge: true,
             rebase: true,
             delete_branch_on_merge: true,
         };
-        let app = app_fenetre_ouverte(pr_avec_regles(1, regles));
-        let fenetre = app.merge.as_ref().expect("la fenêtre doit être ouverte");
-        assert_eq!(fenetre.method(), Some(MergeMethod::Rebase));
+        let app = app_with_dialog(pr_with_rules(1, rules));
+        let dialog = app.merge.as_ref().expect("la fenêtre doit être ouverte");
+        assert_eq!(dialog.method(), Some(MergeMethod::Rebase));
     }
 
     #[test]
-    fn un_brouillon_n_ouvre_pas_la_fenetre_et_dit_pourquoi() {
-        let brouillon = PrSummary {
+    fn a_draft_does_not_open_the_dialog_and_says_why() {
+        let draft = PrSummary {
             is_draft: true,
             ..pr(1)
         };
-        let app = app_fenetre_ouverte(brouillon);
+        let app = app_with_dialog(draft);
         assert!(app.merge.is_none());
         assert_eq!(
             app.notice.as_deref(),
-            Some("Pull request en brouillon, elle doit être publiée.")
+            Some("This pull request is a draft, it must be published first.")
         );
     }
 
     #[test]
-    fn un_conflit_n_ouvre_pas_la_fenetre_et_dit_pourquoi() {
-        let en_conflit = PrSummary {
+    fn a_conflict_does_not_open_the_dialog_and_says_why() {
+        let conflicting = PrSummary {
             mergeable: MergeableState::Conflicting,
             ..pr(1)
         };
-        let app = app_fenetre_ouverte(en_conflit);
+        let app = app_with_dialog(conflicting);
         assert!(app.merge.is_none());
-        assert_eq!(app.notice.as_deref(), Some("Conflits à résoudre."));
+        assert_eq!(app.notice.as_deref(), Some("Conflicts to resolve."));
     }
 
     #[test]
-    fn un_etat_de_fusion_inconnu_demande_de_patienter() {
-        let inconnu = PrSummary {
+    fn an_unknown_merge_state_asks_to_wait() {
+        let unknown = PrSummary {
             mergeable: MergeableState::Unknown,
             ..pr(1)
         };
-        let app = app_fenetre_ouverte(inconnu);
+        let app = app_with_dialog(unknown);
         assert!(app.merge.is_none());
         assert_eq!(
             app.notice.as_deref(),
-            Some("État de fusion en cours de calcul, réessaie dans un instant.")
+            Some("Merge state being computed, try again in a moment.")
         );
     }
 
     #[test]
-    fn un_depot_sans_methode_autorisee_n_ouvre_pas_la_fenetre() {
-        let regles = RepoMergeRules {
+    fn a_repo_with_no_allowed_method_does_not_open_the_dialog() {
+        let rules = RepoMergeRules {
             squash: false,
             merge: false,
             rebase: false,
             delete_branch_on_merge: false,
         };
-        let app = app_fenetre_ouverte(pr_avec_regles(1, regles));
+        let app = app_with_dialog(pr_with_rules(1, rules));
         assert!(app.merge.is_none());
         assert_eq!(
             app.notice.as_deref(),
-            Some("Aucune méthode de fusion autorisée sur ce dépôt.")
+            Some("No merge method allowed on this repository.")
         );
     }
 
     #[test]
-    fn echap_ferme_la_fenetre_sans_aucun_appel() {
-        let mut app = app_fenetre_ouverte(pr_avec_regles(1, tout_autorise()));
-        let commandes = app.handle(Event::Key(Key::Esc));
+    fn esc_closes_the_dialog_without_any_call() {
+        let mut app = app_with_dialog(pr_with_rules(1, all_allowed()));
+        let commands = app.handle(Event::Key(Key::Esc));
         assert!(app.merge.is_none());
-        assert!(commandes.is_empty(), "{commandes:?}");
+        assert!(commands.is_empty(), "{commands:?}");
     }
 
     #[test]
-    fn les_fleches_changent_de_methode_sans_boucler() {
-        let mut app = app_fenetre_ouverte(pr_avec_regles(1, tout_autorise()));
+    fn the_arrows_change_method_without_wrapping() {
+        let mut app = app_with_dialog(pr_with_rules(1, all_allowed()));
         // Départ sur l'écrasement, méthode préférée par défaut.
         app.handle(Event::Key(Key::Up));
-        assert_eq!(methode_choisie(&app), MergeMethod::Squash);
+        assert_eq!(chosen_method(&app), MergeMethod::Squash);
 
         app.handle(Event::Key(Key::Down));
-        assert_eq!(methode_choisie(&app), MergeMethod::Rebase);
+        assert_eq!(chosen_method(&app), MergeMethod::Rebase);
         app.handle(Event::Key(Key::Down));
-        assert_eq!(methode_choisie(&app), MergeMethod::Merge);
+        assert_eq!(chosen_method(&app), MergeMethod::Merge);
         app.handle(Event::Key(Key::Down));
-        assert_eq!(methode_choisie(&app), MergeMethod::Merge);
+        assert_eq!(chosen_method(&app), MergeMethod::Merge);
     }
 
     /// Méthode sous le curseur de la fenêtre ouverte.
-    fn methode_choisie(app: &App) -> MergeMethod {
+    fn chosen_method(app: &App) -> MergeMethod {
         app.merge
             .as_ref()
             .expect("la fenêtre doit être ouverte")
@@ -1098,11 +1109,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn la_fenetre_capte_les_touches_de_l_application() {
-        let mut app = app_fenetre_ouverte(pr_avec_regles(1, tout_autorise()));
-        for touche in [Key::Char('q'), Key::Char('r'), Key::Char('o'), Key::Right] {
-            let commandes = app.handle(Event::Key(touche));
-            assert!(commandes.is_empty(), "{touche:?} a produit {commandes:?}");
+    fn the_dialog_captures_the_application_keys() {
+        let mut app = app_with_dialog(pr_with_rules(1, all_allowed()));
+        for key_pressed in [Key::Char('q'), Key::Char('r'), Key::Char('o'), Key::Right] {
+            let commands = app.handle(Event::Key(key_pressed));
+            assert!(
+                commands.is_empty(),
+                "{key_pressed:?} a produit {commands:?}"
+            );
         }
         assert!(!app.should_quit);
         assert!(app.merge.is_some());
@@ -1110,40 +1124,40 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn ctrl_c_quitte_meme_fenetre_ouverte() {
-        let mut app = app_fenetre_ouverte(pr_avec_regles(1, tout_autorise()));
-        let commandes = app.handle(Event::Key(Key::CtrlC));
+    fn ctrl_c_quits_even_with_the_dialog_open() {
+        let mut app = app_with_dialog(pr_with_rules(1, all_allowed()));
+        let commands = app.handle(Event::Key(Key::CtrlC));
         assert!(app.should_quit);
-        assert_eq!(commandes, vec![Command::Quit]);
+        assert_eq!(commands, vec![Command::Quit]);
     }
 
     #[test]
-    fn un_tick_ne_rafraichit_pas_tant_que_la_fenetre_est_ouverte() {
-        let mut app = app_fenetre_ouverte(pr_avec_regles(1, tout_autorise()));
-        let commandes = app.handle(Event::Tick);
-        assert!(commandes.is_empty(), "{commandes:?}");
+    fn a_tick_does_not_refresh_while_the_dialog_is_open() {
+        let mut app = app_with_dialog(pr_with_rules(1, all_allowed()));
+        let commands = app.handle(Event::Tick);
+        assert!(commands.is_empty(), "{commands:?}");
     }
 
     #[test]
-    fn un_redimensionnement_ne_demande_rien_et_ne_change_rien() {
-        let mut app = app_garnie(vec![pr(1), pr(2)]);
+    fn a_resize_asks_for_nothing_and_changes_nothing() {
+        let mut app = app_with(vec![pr(1), pr(2)]);
         app.handle(Event::Key(Key::Down));
         let avant = app.selected;
 
-        let commandes = app.handle(Event::Resize);
+        let commands = app.handle(Event::Resize);
 
-        assert!(commandes.is_empty(), "{commandes:?}");
+        assert!(commands.is_empty(), "{commands:?}");
         assert_eq!(app.selected, avant);
         assert_eq!(app.view, View::List);
     }
 
     #[test]
-    fn un_redimensionnement_n_efface_pas_le_message_en_cours() {
-        let brouillon = PrSummary {
+    fn a_resize_does_not_clear_the_current_message() {
+        let draft = PrSummary {
             is_draft: true,
             ..pr(1)
         };
-        let mut app = app_fenetre_ouverte(brouillon);
+        let mut app = app_with_dialog(draft);
         assert!(app.notice.is_some());
 
         app.handle(Event::Resize);
@@ -1152,13 +1166,12 @@ pub(crate) mod tests {
     }
 
     /// Détail minimal portant l'identifiant GraphQL demandé.
-    fn detail_de(summary: PrSummary, node_id: &str) -> PrDetail {
+    fn detail_of(summary: PrSummary, node_id: &str) -> PrDetail {
         PrDetail {
             summary,
             node_id: node_id.to_string(),
             body: String::new(),
             head_ref: "branche".to_string(),
-            base_ref: "develop".to_string(),
             checks: Vec::new(),
             reviews: Vec::new(),
             comments: Vec::new(),
@@ -1169,19 +1182,19 @@ pub(crate) mod tests {
     }
 
     /// Ouvre la fenêtre sur la PR donnée, confirme, et rend la commande émise.
-    fn confirmer(app: &mut App) -> Command {
-        let mut commandes = app.handle(Event::Key(Key::Enter));
-        assert_eq!(commandes.len(), 1, "{commandes:?}");
-        commandes.remove(0)
+    fn confirm(app: &mut App) -> Command {
+        let mut commands = app.handle(Event::Key(Key::Enter));
+        assert_eq!(commands.len(), 1, "{commands:?}");
+        commands.remove(0)
     }
 
     #[test]
-    fn confirmer_passe_la_fenetre_en_cours_et_demande_la_fusion() {
-        let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
+    fn confirming_moves_the_dialog_to_submitting_and_asks_for_the_merge() {
+        let mut app = app_with(vec![pr_with_rules(142, all_allowed())]);
         app.handle(Event::Key(Key::Char('m')));
-        let commande = confirmer(&mut app);
+        let command = confirm(&mut app);
 
-        match commande {
+        match command {
             Command::Merge {
                 summary,
                 node_id,
@@ -1192,41 +1205,41 @@ pub(crate) mod tests {
                 assert_eq!(node_id, None);
                 assert_eq!(method, MergeMethod::Squash);
             }
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         }
         assert_eq!(
-            app.merge.as_ref().map(|fenetre| &fenetre.state),
+            app.merge.as_ref().map(|dialog| &dialog.state),
             Some(&MergeDialogState::Submitting)
         );
     }
 
     #[test]
-    fn un_detail_en_cache_fournit_l_identifiant_graphql() {
-        let resume = pr_avec_regles(142, tout_autorise());
-        let mut app = app_garnie(vec![resume.clone()]);
+    fn a_cached_detail_provides_the_graphql_id() {
+        let summary = pr_with_rules(142, all_allowed());
+        let mut app = app_with(vec![summary.clone()]);
         // Ouvre le détail, ce qui déclenche la requête, puis livre la réponse.
         let generation = match &app.handle(Event::Key(Key::Right))[0] {
             Command::FetchDetail { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         app.handle(Event::DetailLoaded {
             generation,
-            key: resume.key.clone(),
-            result: Ok(detail_de(resume.clone(), "PR_identifiant")),
+            key: summary.key.clone(),
+            result: Ok(detail_of(summary.clone(), "PR_identifiant")),
         });
 
         app.handle(Event::Key(Key::Char('m')));
-        match confirmer(&mut app) {
+        match confirm(&mut app) {
             Command::Merge { node_id, .. } => {
                 assert_eq!(node_id.as_deref(), Some("PR_identifiant"));
             }
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         }
     }
 
     #[test]
-    fn confirmer_sur_une_pull_request_disparue_ferme_la_fenetre_avec_un_message() {
-        let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
+    fn confirming_a_gone_pull_request_closes_the_dialog_with_a_message() {
+        let mut app = app_with(vec![pr_with_rules(142, all_allowed())]);
         app.handle(Event::Key(Key::Char('m')));
         // Une réponse de liste déjà en vol au moment de l'ouverture retire la
         // pull request visée.
@@ -1235,50 +1248,80 @@ pub(crate) mod tests {
             result: Ok(page(Vec::new())),
         });
 
-        let commandes = app.handle(Event::Key(Key::Enter));
+        let commands = app.handle(Event::Key(Key::Enter));
 
-        assert!(commandes.is_empty(), "{commandes:?}");
+        assert!(commands.is_empty(), "{commands:?}");
         assert!(app.merge.is_none());
-        assert_eq!(app.notice.as_deref(), Some("Pull request introuvable."));
+        assert_eq!(app.notice.as_deref(), Some("Pull request not found."));
     }
 
     #[test]
-    fn une_fusion_reussie_ferme_la_fenetre_et_rafraichit_la_liste() {
-        let resume = pr_avec_regles(142, tout_autorise());
-        let cle = resume.key.clone();
-        let mut app = app_garnie(vec![resume]);
+    fn a_successful_merge_closes_the_dialog_and_refreshes_the_list() {
+        let summary = pr_with_rules(142, all_allowed());
+        let key = summary.key.clone();
+        let mut app = app_with(vec![summary]);
         app.handle(Event::Key(Key::Char('m')));
-        confirmer(&mut app);
+        confirm(&mut app);
 
-        let commandes = app.handle(Event::MergeFinished {
-            key: cle,
+        let commands = app.handle(Event::MergeFinished {
+            key: key,
             result: Ok(()),
         });
 
         assert!(app.merge.is_none());
-        assert_eq!(app.notice.as_deref(), Some("moi/depot #142 fusionnée"));
+        assert_eq!(app.notice.as_deref(), Some("moi/depot #142 merged"));
         assert!(
-            matches!(commandes.as_slice(), [Command::FetchList { .. }]),
-            "{commandes:?}"
+            matches!(commands.as_slice(), [Command::FetchList { .. }]),
+            "{commands:?}"
+        );
+        assert!(
+            app.prs.is_empty(),
+            "la PR fusionnée quitte la liste sans attendre la réponse : {:?}",
+            app.prs
         );
     }
 
     #[test]
-    fn une_fusion_echouee_laisse_la_fenetre_avec_le_message_de_github() {
-        let resume = pr_avec_regles(142, tout_autorise());
-        let cle = resume.key.clone();
-        let mut app = app_garnie(vec![resume]);
+    fn a_successful_merge_leaves_the_other_pull_requests_and_the_selection_in_place() {
+        let mut app = app_with(vec![
+            pr_with_rules(1, all_allowed()),
+            pr_with_rules(2, all_allowed()),
+            pr_with_rules(3, all_allowed()),
+        ]);
+        app.handle(Event::Key(Key::Down));
         app.handle(Event::Key(Key::Char('m')));
-        confirmer(&mut app);
+        confirm(&mut app);
+        app.handle(Event::MergeFinished {
+            key: pr(2).key,
+            result: Ok(()),
+        });
 
-        let commandes = app.handle(Event::MergeFinished {
-            key: cle,
+        assert_eq!(
+            app.prs.iter().map(|pr| pr.key.number).collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert_eq!(
+            app.selected, 1,
+            "la sélection reste à la même place à l'écran"
+        );
+    }
+
+    #[test]
+    fn a_failed_merge_leaves_the_dialog_with_the_github_message() {
+        let summary = pr_with_rules(142, all_allowed());
+        let key = summary.key.clone();
+        let mut app = app_with(vec![summary]);
+        app.handle(Event::Key(Key::Char('m')));
+        confirm(&mut app);
+
+        let commands = app.handle(Event::MergeFinished {
+            key: key,
             result: Err(GithubError::Api("Base branch was modified.".to_string())),
         });
 
-        assert!(commandes.is_empty(), "{commandes:?}");
+        assert!(commands.is_empty(), "{commands:?}");
         assert_eq!(
-            app.merge.as_ref().map(|fenetre| fenetre.state.clone()),
+            app.merge.as_ref().map(|dialog| dialog.state.clone()),
             Some(MergeDialogState::Failed(
                 "Base branch was modified.".to_string()
             ))
@@ -1288,126 +1331,129 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn un_merge_finished_d_une_autre_pr_est_ignore() {
-        let resume = pr_avec_regles(142, tout_autorise());
-        let autre = PrKey {
-            repo: resume.key.repo.clone(),
+    fn a_merge_finished_for_another_pr_is_ignored() {
+        let summary = pr_with_rules(142, all_allowed());
+        let other = PrKey {
+            repo: summary.key.repo.clone(),
             number: 7,
         };
-        let mut app = app_garnie(vec![resume]);
+        let mut app = app_with(vec![summary]);
         app.handle(Event::Key(Key::Char('m')));
-        confirmer(&mut app);
-        let fenetre_avant = app.merge.clone();
+        confirm(&mut app);
+        let dialog_before = app.merge.clone();
 
-        let commandes = app.handle(Event::MergeFinished {
-            key: autre,
+        let commands = app.handle(Event::MergeFinished {
+            key: other,
             result: Ok(()),
         });
 
-        assert!(commandes.is_empty(), "{commandes:?}");
+        assert!(commands.is_empty(), "{commands:?}");
         assert_eq!(
-            app.merge, fenetre_avant,
+            app.merge, dialog_before,
             "la fenêtre reste inchangée : la réponse ne la concerne pas"
         );
     }
 
     #[test]
-    fn entree_apres_un_echec_reessaie_avec_la_meme_methode() {
-        let resume = pr_avec_regles(142, tout_autorise());
-        let cle = resume.key.clone();
-        let mut app = app_garnie(vec![resume]);
+    fn enter_after_a_failure_retries_with_the_same_method() {
+        let summary = pr_with_rules(142, all_allowed());
+        let key = summary.key.clone();
+        let mut app = app_with(vec![summary]);
         app.handle(Event::Key(Key::Char('m')));
         // Descendre d'un cran : le rebasage.
         app.handle(Event::Key(Key::Down));
-        confirmer(&mut app);
+        confirm(&mut app);
         app.handle(Event::MergeFinished {
-            key: cle,
+            key: key,
             result: Err(GithubError::Api("Base branch was modified.".to_string())),
         });
 
-        match confirmer(&mut app) {
+        match confirm(&mut app) {
             Command::Merge { method, .. } => assert_eq!(method, MergeMethod::Rebase),
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         }
     }
 
     #[test]
-    fn echap_apres_un_echec_ferme_la_fenetre() {
-        let resume = pr_avec_regles(142, tout_autorise());
-        let cle = resume.key.clone();
-        let mut app = app_garnie(vec![resume]);
+    fn esc_after_a_failure_closes_the_dialog() {
+        let summary = pr_with_rules(142, all_allowed());
+        let key = summary.key.clone();
+        let mut app = app_with(vec![summary]);
         app.handle(Event::Key(Key::Char('m')));
-        confirmer(&mut app);
+        confirm(&mut app);
         app.handle(Event::MergeFinished {
-            key: cle,
+            key: key,
             result: Err(GithubError::Api("Base branch was modified.".to_string())),
         });
 
-        let commandes = app.handle(Event::Key(Key::Esc));
+        let commands = app.handle(Event::Key(Key::Esc));
         assert!(app.merge.is_none());
-        assert!(commandes.is_empty(), "{commandes:?}");
+        assert!(commands.is_empty(), "{commands:?}");
     }
 
     #[test]
-    fn aucune_touche_n_agit_pendant_l_appel() {
-        let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
+    fn no_key_acts_while_the_call_is_in_flight() {
+        let mut app = app_with(vec![pr_with_rules(142, all_allowed())]);
         app.handle(Event::Key(Key::Char('m')));
-        confirmer(&mut app);
+        confirm(&mut app);
 
-        for touche in [Key::Esc, Key::Enter, Key::Up, Key::Down, Key::Char('q')] {
-            let commandes = app.handle(Event::Key(touche));
-            assert!(commandes.is_empty(), "{touche:?} a produit {commandes:?}");
+        for key_pressed in [Key::Esc, Key::Enter, Key::Up, Key::Down, Key::Char('q')] {
+            let commands = app.handle(Event::Key(key_pressed));
+            assert!(
+                commands.is_empty(),
+                "{key_pressed:?} a produit {commands:?}"
+            );
         }
         assert_eq!(
-            app.merge.as_ref().map(|fenetre| &fenetre.state),
+            app.merge.as_ref().map(|dialog| &dialog.state),
             Some(&MergeDialogState::Submitting)
         );
     }
 
     #[test]
-    fn un_motif_de_refus_s_efface_a_la_touche_suivante() {
-        let brouillon = PrSummary {
+    fn a_refusal_reason_clears_on_the_next_key() {
+        let draft = PrSummary {
             is_draft: true,
             ..pr(1)
         };
-        let mut app = app_fenetre_ouverte(brouillon);
+        let mut app = app_with_dialog(draft);
         assert!(app.notice.is_some());
         app.handle(Event::Key(Key::Down));
         assert!(app.notice.is_none());
     }
 
     #[test]
-    fn un_motif_de_refus_s_affiche_dans_la_barre_d_etat() {
-        let brouillon = PrSummary {
+    fn a_refusal_reason_shows_in_the_status_bar() {
+        let draft = PrSummary {
             is_draft: true,
             ..pr(1)
         };
-        let app = app_fenetre_ouverte(brouillon);
+        let app = app_with_dialog(draft);
         assert!(
-            app.status_line(CONFORTABLE)
-                .contains("Pull request en brouillon, elle doit être publiée."),
+            app.status_line(ROOMY)
+                .contains("This pull request is a draft, it must be published first."),
             "{}",
-            app.status_line(CONFORTABLE)
+            app.status_line(ROOMY)
         );
     }
 
     #[test]
-    fn m_sur_la_pr_ouverte_en_detail_vise_cette_pr() {
-        let mut app = app_garnie(vec![pr_de("moi/a", 1), pr_de("moi/b", 2)]);
+    fn m_in_the_detail_view_targets_that_pr() {
+        let mut app = app_with(vec![pr_in("moi/a", 1), pr_in("moi/b", 2)]);
         app.handle(Event::Key(Key::Down));
         app.handle(Event::Key(Key::Right));
         app.handle(Event::Key(Key::Char('m')));
-        let fenetre = app.merge.as_ref().expect("la fenêtre doit être ouverte");
-        assert_eq!(fenetre.key.repo, "moi/b");
-        assert_eq!(fenetre.key.number, 2);
+        let dialog = app.merge.as_ref().expect("la fenêtre doit être ouverte");
+        assert_eq!(dialog.key.repo, "moi/b");
+        assert_eq!(dialog.key.number, 2);
     }
 
     #[test]
-    fn le_demarrage_emet_une_seule_requete() {
+    fn startup_emits_a_single_request() {
         let mut app = App::new(Config::default());
-        let commandes = app.start();
+        let commands = app.start();
         assert_eq!(
-            commandes,
+            commands,
             vec![Command::FetchList {
                 generation: 1,
                 query: "is:pr author:@me is:open sort:updated-desc".to_string(),
@@ -1418,73 +1464,73 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn q_demande_la_sortie() {
-        let (mut app, _) = app_demarree();
-        let commandes = app.handle(Event::Key(Key::Char('q')));
-        assert_eq!(commandes, vec![Command::Quit]);
+    fn q_asks_to_quit() {
+        let (mut app, _) = app_started();
+        let commands = app.handle(Event::Key(Key::Char('q')));
+        assert_eq!(commands, vec![Command::Quit]);
         assert!(app.should_quit);
     }
 
     #[test]
-    fn r_relance_une_requete_avec_une_generation_plus_recente() {
-        let (mut app, premiere) = app_demarree();
-        let commandes = app.handle(Event::Key(Key::Char('r')));
-        match &commandes[0] {
-            Command::FetchList { generation, .. } => assert!(*generation > premiere),
-            autre => panic!("commande inattendue : {autre:?}"),
+    fn r_starts_a_request_with_a_newer_generation() {
+        let (mut app, first_one) = app_started();
+        let commands = app.handle(Event::Key(Key::Char('r')));
+        match &commands[0] {
+            Command::FetchList { generation, .. } => assert!(*generation > first_one),
+            other => panic!("commande inattendue : {other:?}"),
         }
         assert!(app.loading.list);
     }
 
     #[test]
-    fn le_minuteur_relance_une_requete() {
-        let (mut app, premiere) = app_demarree();
+    fn the_timer_starts_a_new_request() {
+        let (mut app, first_one) = app_started();
         app.handle(Event::ListLoaded {
-            generation: premiere,
+            generation: first_one,
             result: Ok(page(vec![])),
         });
-        let commandes = app.handle(Event::Tick);
-        match &commandes[0] {
-            Command::FetchList { generation, .. } => assert!(*generation > premiere),
-            autre => panic!("commande inattendue : {autre:?}"),
+        let commands = app.handle(Event::Tick);
+        match &commands[0] {
+            Command::FetchList { generation, .. } => assert!(*generation > first_one),
+            other => panic!("commande inattendue : {other:?}"),
         }
     }
 
     #[test]
-    fn une_touche_inconnue_ne_fait_rien() {
-        let (mut app, _) = app_demarree();
-        let commandes = app.handle(Event::Key(Key::Other));
-        assert!(commandes.is_empty());
+    fn an_unknown_key_does_nothing() {
+        let (mut app, _) = app_started();
+        let commands = app.handle(Event::Key(Key::Other));
+        assert!(commands.is_empty());
         assert!(!app.should_quit);
     }
 
     #[test]
-    fn un_resultat_a_jour_remplace_la_liste() {
-        let (mut app, generation) = app_demarree();
-        let commandes = app.handle(Event::ListLoaded {
+    fn an_up_to_date_result_replaces_the_list() {
+        let (mut app, generation) = app_started();
+        let commands = app.handle(Event::ListLoaded {
             generation,
             result: Ok(page(vec![pr(1), pr(2)])),
         });
-        assert!(commandes.is_empty());
+        assert!(commands.is_empty());
         assert_eq!(app.prs, vec![pr(1), pr(2)]);
         assert!(!app.loading.list);
         assert!(app.last_refresh.is_some());
     }
 
     #[test]
-    fn un_resultat_perime_est_ignore() {
-        let (mut app, generation) = app_demarree();
+    fn a_stale_result_is_ignored() {
+        let (mut app, generation) = app_started();
         app.handle(Event::ListLoaded {
             generation,
             result: Ok(page(vec![pr(1)])),
         });
         // Une nouvelle requête part, puis la réponse lente de l'ancienne arrive.
         app.handle(Event::Key(Key::Char('r')));
-        let commandes = app.handle(Event::ListLoaded {
+        let commands = app.handle(Event::ListLoaded {
             generation,
             result: Ok(page(vec![pr(99)])),
         });
-        assert!(commandes.is_empty());
+        assert!(commands.is_empty());
         assert_eq!(
             app.prs,
             vec![pr(1)],
@@ -1494,35 +1540,35 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn une_erreur_laisse_la_liste_affichee() {
-        let (mut app, generation) = app_demarree();
+    fn an_error_leaves_the_list_on_screen() {
+        let (mut app, generation) = app_started();
         app.handle(Event::ListLoaded {
             generation,
             result: Ok(page(vec![pr(1)])),
         });
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::FetchList { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         app.handle(Event::ListLoaded {
             generation,
             result: Err(GithubError::Transport),
         });
         assert_eq!(app.prs, vec![pr(1)], "la liste précédente reste visible");
-        assert_eq!(app.error.as_deref(), Some("Réseau injoignable."));
+        assert_eq!(app.error.as_deref(), Some("Network unreachable."));
         assert!(!app.loading.list);
     }
 
     #[test]
-    fn un_succes_efface_l_erreur_en_cours() {
-        let (mut app, generation) = app_demarree();
+    fn a_success_clears_the_current_error() {
+        let (mut app, generation) = app_started();
         app.handle(Event::ListLoaded {
             generation,
             result: Err(GithubError::Transport),
         });
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::FetchList { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         app.handle(Event::ListLoaded {
             generation,
@@ -1532,198 +1578,194 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn le_status_annonce_le_nombre_de_pull_requests() {
-        let (mut app, generation) = app_demarree();
+    fn the_status_bar_announces_the_number_of_pull_requests() {
+        let (mut app, generation) = app_started();
         app.handle(Event::ListLoaded {
             generation,
             result: Ok(page(vec![pr(1), pr(2)])),
         });
         assert!(
-            app.status_line(CONFORTABLE).starts_with("2 pull requests"),
+            app.status_line(ROOMY).starts_with("2 pull requests"),
             "{}",
-            app.status_line(CONFORTABLE)
+            app.status_line(ROOMY)
         );
 
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::FetchList { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         app.handle(Event::ListLoaded {
             generation,
             result: Ok(page(vec![])),
         });
         assert!(
-            app.status_line(CONFORTABLE)
-                .starts_with("Aucune pull request"),
+            app.status_line(ROOMY).starts_with("No pull requests"),
             "{}",
-            app.status_line(CONFORTABLE)
+            app.status_line(ROOMY)
         );
     }
 
     #[test]
-    fn q_pendant_un_chargement_quitte_quand_meme() {
-        let (mut app, _) = app_demarree();
+    fn q_during_a_load_quits_anyway() {
+        let (mut app, _) = app_started();
         assert!(app.loading.list, "une requête est bien en cours");
-        let commandes = app.handle(Event::Key(Key::Char('q')));
-        assert_eq!(commandes, vec![Command::Quit]);
+        let commands = app.handle(Event::Key(Key::Char('q')));
+        assert_eq!(commands, vec![Command::Quit]);
         assert!(app.should_quit);
     }
 
     #[test]
-    fn un_evenement_quit_arrete_la_boucle() {
-        let (mut app, _) = app_demarree();
-        let commandes = app.handle(Event::Quit);
-        assert_eq!(commandes, vec![Command::Quit]);
+    fn a_quit_event_stops_the_loop() {
+        let (mut app, _) = app_started();
+        let commands = app.handle(Event::Quit);
+        assert_eq!(commands, vec![Command::Quit]);
         assert!(app.should_quit);
     }
 
     #[test]
-    fn la_barre_d_etat_au_demarrage_n_annonce_l_attente_qu_une_fois() {
-        let (app, _) = app_demarree();
-        assert_eq!(
-            app.status_line(CONFORTABLE),
-            format!("Chargement… · {AIDE_LISTE}")
-        );
+    fn the_status_bar_at_startup_announces_the_wait_only_once() {
+        let (app, _) = app_started();
+        assert_eq!(app.status_line(ROOMY), format!("Loading… · {HELP_LIST}"));
     }
 
     #[test]
-    fn la_barre_d_etat_apres_une_reponse_donne_l_heure_et_l_aide() {
-        let (mut app, generation) = app_demarree();
+    fn the_status_bar_after_a_response_gives_the_time_and_the_help() {
+        let (mut app, generation) = app_started();
         app.handle(Event::ListLoaded {
             generation,
             result: Ok(page(vec![pr(1), pr(2)])),
         });
-        let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
+        let time = app.last_refresh.unwrap().format("%H:%M").to_string();
         assert_eq!(
-            app.status_line(CONFORTABLE),
-            format!("2 pull requests · mis à jour à {heure} · {AIDE_LISTE}")
+            app.status_line(ROOMY),
+            format!("2 pull requests · updated at {time} · {HELP_LIST}")
         );
     }
 
     #[test]
-    fn la_barre_d_etat_annonce_le_chargement_d_un_rafraichissement() {
-        let (mut app, generation) = app_demarree();
+    fn the_status_bar_announces_a_refresh_in_progress() {
+        let (mut app, generation) = app_started();
         app.handle(Event::ListLoaded {
             generation,
             result: Ok(page(vec![pr(1)])),
         });
         app.handle(Event::Key(Key::Char('r')));
-        let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
+        let time = app.last_refresh.unwrap().format("%H:%M").to_string();
         assert_eq!(
-            app.status_line(CONFORTABLE),
-            format!("1 pull request · mis à jour à {heure} · chargement… · {AIDE_LISTE}")
+            app.status_line(ROOMY),
+            format!("1 pull request · updated at {time} · loading… · {HELP_LIST}")
         );
     }
 
     #[test]
-    fn la_barre_d_etat_reprend_l_erreur_telle_quelle() {
-        let (mut app, generation) = app_demarree();
+    fn the_status_bar_repeats_the_error_verbatim() {
+        let (mut app, generation) = app_started();
         app.handle(Event::ListLoaded {
             generation,
             result: Err(GithubError::Transport),
         });
         assert_eq!(
-            app.status_line(CONFORTABLE),
-            format!("Réseau injoignable. · {AIDE_LISTE}"),
+            app.status_line(ROOMY),
+            format!("Network unreachable. · {HELP_LIST}"),
             "aucune heure : aucun rafraîchissement n'a encore réussi"
         );
     }
 
     #[test]
-    fn la_barre_d_etat_ne_depasse_jamais_la_largeur_donnee() {
-        let mut app = app_garnie(vec![pr(1), pr(2)]);
+    fn the_status_bar_never_exceeds_the_given_width() {
+        let mut app = app_with(vec![pr(1), pr(2)]);
         // 80 colonnes : la largeur d'un terminal standard, où l'aide seule ne
         // tient déjà pas avec le résumé et l'heure.
-        for largeur in [1, 12, 40, 80, 117, CONFORTABLE] {
-            let barre = app.status_line(largeur);
+        for width in [1, 12, 40, 80, 117, ROOMY] {
+            let bar = app.status_line(width);
             assert!(
-                barre.chars().count() <= largeur as usize,
-                "largeur {largeur} : {barre}"
+                bar.chars().count() <= width as usize,
+                "largeur {width} : {bar}"
             );
         }
         app.handle(Event::Key(Key::Right));
-        for largeur in [1, 40, 80, CONFORTABLE] {
-            let barre = app.status_line(largeur);
+        for width in [1, 40, 80, ROOMY] {
+            let bar = app.status_line(width);
             assert!(
-                barre.chars().count() <= largeur as usize,
-                "en vue détail, largeur {largeur} : {barre}"
+                bar.chars().count() <= width as usize,
+                "en vue détail, largeur {width} : {bar}"
             );
         }
     }
 
     #[test]
-    fn une_barre_d_etat_etroite_sacrifie_l_aide_avant_le_reste() {
-        let app = app_garnie(vec![pr(1), pr(2)]);
-        let heure = app.last_refresh.unwrap().format("%H:%M").to_string();
+    fn a_narrow_status_bar_drops_the_help_before_the_rest() {
+        let app = app_with(vec![pr(1), pr(2)]);
+        let time = app.last_refresh.unwrap().format("%H:%M").to_string();
 
         assert_eq!(
-            app.status_line(CONFORTABLE),
-            format!("2 pull requests · mis à jour à {heure} · {AIDE_LISTE}"),
+            app.status_line(ROOMY),
+            format!("2 pull requests · updated at {time} · {HELP_LIST}"),
             "au large, tout tient"
         );
 
-        let etroite = app.status_line(80);
+        let narrow = app.status_line(80);
         assert!(
-            !etroite.contains("naviguer"),
-            "l'aide est un rappel : elle part la première ({etroite})"
+            !narrow.contains("move"),
+            "l'aide est un rappel : elle part la première ({narrow})"
         );
         assert_eq!(
-            etroite,
-            format!("2 pull requests · mis à jour à {heure}"),
+            narrow,
+            format!("2 pull requests · updated at {time}"),
             "le résumé et l'heure restent entiers"
         );
     }
 
     #[test]
-    fn une_barre_d_etat_tres_etroite_garde_l_erreur() {
-        let (mut app, generation) = app_demarree();
+    fn a_very_narrow_status_bar_keeps_the_error() {
+        let (mut app, generation) = app_started();
         app.handle(Event::ListLoaded {
             generation,
             result: Err(GithubError::Transport),
         });
         assert_eq!(
             app.status_line(30),
-            "Réseau injoignable.",
+            "Network unreachable.",
             "l'erreur est ce qu'on garde en dernier"
         );
     }
 
     #[test]
-    fn l_aide_clavier_suit_la_vue_affichee() {
-        let mut app = app_garnie(vec![pr(1)]);
+    fn the_keyboard_help_follows_the_displayed_view() {
+        let mut app = app_with(vec![pr(1)]);
         assert!(
-            app.status_line(CONFORTABLE).ends_with(AIDE_LISTE),
+            app.status_line(ROOMY).ends_with(HELP_LIST),
             "{}",
-            app.status_line(CONFORTABLE)
+            app.status_line(ROOMY)
         );
 
         app.handle(Event::Key(Key::Right));
-        let barre = app.status_line(CONFORTABLE);
-        assert!(barre.ends_with(AIDE_DETAIL), "{barre}");
+        let bar = app.status_line(ROOMY);
+        assert!(bar.ends_with(HELP_DETAIL), "{bar}");
         assert!(
-            barre.contains("← liste") && !barre.contains("→ détail"),
-            "une touche sans effet dans la vue n'est pas rappelée : {barre}"
+            bar.contains("← list") && !bar.contains("→ details"),
+            "une touche sans effet dans la vue n'est pas rappelée : {bar}"
         );
     }
 
     #[test]
-    fn l_aide_clavier_de_la_fenetre_de_fusion_remplace_celle_de_la_liste() {
-        let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
+    fn the_merge_dialog_help_replaces_the_list_help() {
+        let mut app = app_with(vec![pr_with_rules(142, all_allowed())]);
         app.handle(Event::Key(Key::Char('m')));
-        let barre = app.status_line(CONFORTABLE);
+        let bar = app.status_line(ROOMY);
 
-        assert!(barre.contains(AIDE_FUSION), "{barre}");
-        assert!(!barre.contains("q quitter"), "{barre}");
+        assert!(bar.contains(HELP_MERGE), "{bar}");
+        assert!(!bar.contains("q quitter"), "{bar}");
     }
 
     #[test]
-    fn les_filtres_des_reglages_sont_transmis_a_la_requete() {
-        let reglages = Config {
+    fn the_settings_filters_are_passed_to_the_query() {
+        let settings = Config {
             filters: vec!["review-requested:@me".to_string()],
             page_size: 7,
             ..Config::default()
         };
-        let mut app = App::new(reglages);
+        let mut app = App::new(settings);
         assert_eq!(
             app.start(),
             vec![Command::FetchList {
@@ -1735,48 +1777,48 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn un_filtre_inconnu_des_reglages_traverse_la_requete_intact() {
-        let reglages = Config {
+    fn an_unknown_settings_filter_reaches_the_query_intact() {
+        let settings = Config {
             filters: vec!["involves:@me -is:draft".to_string()],
             ..Config::default()
         };
-        let mut app = App::new(reglages);
+        let mut app = App::new(settings);
         match &app.start()[0] {
             Command::FetchList { query, .. } => {
                 assert_eq!(query, "is:pr involves:@me -is:draft sort:updated-desc")
             }
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         }
     }
 
     #[test]
-    fn l_ordre_des_filtres_des_reglages_ne_change_pas_les_termes_ramenes() {
-        let requete = |filtres: Vec<&str>| {
-            let reglages = Config {
-                filters: filtres.into_iter().map(str::to_string).collect(),
+    fn the_order_of_the_settings_filters_does_not_change_the_terms_sent() {
+        let query = |filters: Vec<&str>| {
+            let settings = Config {
+                filters: filters.into_iter().map(str::to_string).collect(),
                 ..Config::default()
             };
-            match &App::new(reglages).start()[0] {
+            match &App::new(settings).start()[0] {
                 Command::FetchList { query, .. } => query.clone(),
-                autre => panic!("commande inattendue : {autre:?}"),
+                other => panic!("commande inattendue : {other:?}"),
             }
         };
 
-        let un = requete(vec!["author:@me", "is:open"]);
-        let autre = requete(vec!["is:open", "author:@me"]);
-        assert!(un.starts_with("is:pr "), "{un}");
-        assert!(un.ends_with(" sort:updated-desc"), "{un}");
+        let first = query(vec!["author:@me", "is:open"]);
+        let second = query(vec!["is:open", "author:@me"]);
+        assert!(first.starts_with("is:pr "), "{first}");
+        assert!(first.ends_with(" sort:updated-desc"), "{first}");
 
-        let mut mots_un: Vec<&str> = un.split(' ').collect();
-        let mut mots_autre: Vec<&str> = autre.split(' ').collect();
-        mots_un.sort_unstable();
-        mots_autre.sort_unstable();
-        assert_eq!(mots_un, mots_autre);
+        let mut words_first: Vec<&str> = first.split(' ').collect();
+        let mut words_second: Vec<&str> = second.split(' ').collect();
+        words_first.sort_unstable();
+        words_second.sort_unstable();
+        assert_eq!(words_first, words_second);
     }
 
     #[test]
-    fn les_fleches_deplacent_la_selection() {
-        let mut app = app_garnie(vec![pr(1), pr(2), pr(3)]);
+    fn the_arrows_move_the_selection() {
+        let mut app = app_with(vec![pr(1), pr(2), pr(3)]);
         assert_eq!(app.selected, 0);
 
         assert!(app.handle(Event::Key(Key::Down)).is_empty());
@@ -1790,8 +1832,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn j_et_k_deplacent_la_selection_comme_les_fleches() {
-        let mut app = app_garnie(vec![pr(1), pr(2)]);
+    fn j_and_k_move_the_selection_like_the_arrows() {
+        let mut app = app_with(vec![pr(1), pr(2)]);
         app.handle(Event::Key(Key::Char('j')));
         assert_eq!(app.selected, 1);
         app.handle(Event::Key(Key::Char('k')));
@@ -1799,8 +1841,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn la_selection_ne_deborde_pas_des_extremites() {
-        let mut app = app_garnie(vec![pr(1), pr(2)]);
+    fn the_selection_does_not_run_past_the_ends() {
+        let mut app = app_with(vec![pr(1), pr(2)]);
 
         // En haut de liste, la flèche haut ne fait rien : pas de bouclage.
         app.handle(Event::Key(Key::Up));
@@ -1812,8 +1854,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn une_liste_vide_n_a_pas_de_selection() {
-        let mut app = app_garnie(vec![]);
+    fn an_empty_list_has_no_selection() {
+        let mut app = app_with(vec![]);
         assert!(app.selected_pr().is_none());
         app.handle(Event::Key(Key::Down));
         app.handle(Event::Key(Key::Up));
@@ -1822,27 +1864,27 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn le_rafraichissement_suit_la_pr_selectionnee() {
-        let mut app = app_garnie(vec![pr(1), pr(2), pr(3)]);
+    fn the_refresh_follows_the_selected_pr() {
+        let mut app = app_with(vec![pr(1), pr(2), pr(3)]);
         app.handle(Event::Key(Key::Down));
         assert_eq!(app.selected_pr().map(|pr| pr.key.number), Some(2));
 
         // La 2 est passée en queue : la sélection la suit.
-        rafraichir(&mut app, vec![pr(3), pr(1), pr(2)]);
+        refresh_with(&mut app, vec![pr(3), pr(1), pr(2)]);
         assert_eq!(app.selected, 2);
         assert_eq!(app.selected_pr().map(|pr| pr.key.number), Some(2));
     }
 
     #[test]
-    fn deux_depots_de_meme_numero_ne_sont_pas_confondus() {
-        let mut app = app_garnie(vec![pr_de("moi/un", 7), pr_de("moi/autre", 7)]);
+    fn two_repos_with_the_same_number_are_not_confused() {
+        let mut app = app_with(vec![pr_in("moi/un", 7), pr_in("moi/autre", 7)]);
         app.handle(Event::Key(Key::Down));
         assert_eq!(
             app.selected_pr().map(|pr| pr.key.repo.clone()),
             Some("moi/autre".to_string())
         );
 
-        rafraichir(&mut app, vec![pr_de("moi/autre", 7), pr_de("moi/un", 7)]);
+        refresh_with(&mut app, vec![pr_in("moi/autre", 7), pr_in("moi/un", 7)]);
         assert_eq!(
             app.selected_pr().map(|pr| pr.key.repo.clone()),
             Some("moi/autre".to_string()),
@@ -1851,14 +1893,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn une_pr_disparue_laisse_la_selection_dans_les_bornes() {
-        let mut app = app_garnie(vec![pr(1), pr(2), pr(3)]);
+    fn a_gone_pr_leaves_the_selection_within_bounds() {
+        let mut app = app_with(vec![pr(1), pr(2), pr(3)]);
         app.handle(Event::Key(Key::Down));
         app.handle(Event::Key(Key::Down));
         assert_eq!(app.selected, 2);
 
         // La 3 a été fusionnée : la liste rétrécit.
-        rafraichir(&mut app, vec![pr(1), pr(2)]);
+        refresh_with(&mut app, vec![pr(1), pr(2)]);
         assert_eq!(
             app.selected, 1,
             "l'indice précédent, borné à la nouvelle taille"
@@ -1867,17 +1909,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn une_liste_devenue_vide_n_a_plus_de_selection() {
-        let mut app = app_garnie(vec![pr(1), pr(2)]);
+    fn a_list_gone_empty_has_no_selection_left() {
+        let mut app = app_with(vec![pr(1), pr(2)]);
         app.handle(Event::Key(Key::Down));
-        rafraichir(&mut app, vec![]);
+        refresh_with(&mut app, vec![]);
         assert_eq!(app.selected, 0);
         assert!(app.selected_pr().is_none());
     }
 
     #[test]
-    fn un_tick_pendant_un_chargement_de_liste_ne_relance_rien() {
-        let (mut app, _) = app_demarree();
+    fn a_tick_during_a_list_load_starts_nothing() {
+        let (mut app, _) = app_started();
         assert!(app.loading.list, "la requête de démarrage est en cours");
         assert!(
             app.handle(Event::Tick).is_empty(),
@@ -1886,30 +1928,29 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn un_tick_apres_la_reponse_relance_la_liste() {
-        let mut app = app_garnie(vec![pr(1)]);
+    fn a_tick_after_the_response_reloads_the_list() {
+        let mut app = app_with(vec![pr(1)]);
         assert!(!app.loading.list);
         match &app.handle(Event::Tick)[0] {
             Command::FetchList { .. } => {}
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         }
     }
 
     #[test]
-    fn ctrl_c_quitte() {
-        let (mut app, _) = app_demarree();
+    fn ctrl_c_quits() {
+        let (mut app, _) = app_started();
         assert_eq!(app.handle(Event::Key(Key::CtrlC)), vec![Command::Quit]);
         assert!(app.should_quit);
     }
 
     /// Détail d'une pull request, minimal mais complet dans sa forme.
-    pub(crate) fn detail(numero: u32) -> PrDetail {
-        let resume = pr(numero);
+    pub(crate) fn detail(number: u32) -> PrDetail {
+        let summary = pr(number);
         PrDetail {
-            node_id: format!("PR_{numero}"),
+            node_id: format!("PR_{number}"),
             body: "Première ligne.\nSeconde ligne.".to_string(),
             head_ref: "ma-branche".to_string(),
-            base_ref: "develop".to_string(),
             checks: vec![CheckRun {
                 name: "tests".to_string(),
                 state: ChecksState::Success,
@@ -1942,42 +1983,42 @@ pub(crate) mod tests {
             ],
             additions: 12,
             deletions: 3,
-            summary: resume,
+            summary: summary,
         }
     }
 
     /// Ouvre le détail de la sélection et rend la génération demandée.
-    fn ouvrir_detail(app: &mut App) -> Generation {
+    fn open_detail_of(app: &mut App) -> Generation {
         match &app.handle(Event::Key(Key::Right))[..] {
             [Command::FetchDetail { generation, .. }] => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         }
     }
 
     #[test]
-    fn la_fleche_droite_ouvre_le_detail_et_demande_les_donnees() {
-        let mut app = app_garnie(vec![pr(1), pr(2)]);
+    fn the_right_arrow_opens_the_detail_and_asks_for_the_data() {
+        let mut app = app_with(vec![pr(1), pr(2)]);
         app.handle(Event::Key(Key::Down));
-        let commandes = app.handle(Event::Key(Key::Right));
+        let commands = app.handle(Event::Key(Key::Right));
         assert!(matches!(app.view, View::Detail { .. }));
-        match &commandes[..] {
+        match &commands[..] {
             [Command::FetchDetail { summary, .. }] => assert_eq!(summary.key.number, 2),
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         }
         assert!(app.loading.detail);
     }
 
     #[test]
-    fn entree_ouvre_aussi_le_detail() {
-        let mut app = app_garnie(vec![pr(1)]);
+    fn enter_also_opens_the_detail() {
+        let mut app = app_with(vec![pr(1)]);
         app.handle(Event::Key(Key::Enter));
         assert!(matches!(app.view, View::Detail { .. }));
     }
 
     #[test]
-    fn ouvrir_une_pr_deja_en_cache_n_emet_aucune_commande() {
-        let mut app = app_garnie(vec![pr(1)]);
-        let generation = ouvrir_detail(&mut app);
+    fn opening_a_pr_already_cached_emits_no_command() {
+        let mut app = app_with(vec![pr(1)]);
+        let generation = open_detail_of(&mut app);
         app.handle(Event::DetailLoaded {
             generation,
             key: pr(1).key,
@@ -1985,37 +2026,37 @@ pub(crate) mod tests {
         });
         app.handle(Event::Key(Key::Left));
 
-        let commandes = app.handle(Event::Key(Key::Right));
+        let commands = app.handle(Event::Key(Key::Right));
         assert!(
-            commandes.is_empty(),
-            "le cache de la session évite la requête : {commandes:?}"
+            commands.is_empty(),
+            "le cache de la session évite la requête : {commands:?}"
         );
         assert!(!app.loading.detail);
     }
 
     #[test]
-    fn la_fleche_gauche_et_echap_reviennent_a_la_liste() {
-        let mut app = app_garnie(vec![pr(1)]);
-        ouvrir_detail(&mut app);
+    fn the_left_arrow_and_esc_go_back_to_the_list() {
+        let mut app = app_with(vec![pr(1)]);
+        open_detail_of(&mut app);
         assert!(app.handle(Event::Key(Key::Left)).is_empty());
         assert!(matches!(app.view, View::List));
 
-        ouvrir_detail(&mut app);
+        open_detail_of(&mut app);
         app.handle(Event::Key(Key::Esc));
         assert!(matches!(app.view, View::List));
     }
 
     #[test]
-    fn une_liste_vide_n_ouvre_pas_de_detail() {
-        let mut app = app_garnie(vec![]);
+    fn an_empty_list_opens_no_detail() {
+        let mut app = app_with(vec![]);
         assert!(app.handle(Event::Key(Key::Right)).is_empty());
         assert!(matches!(app.view, View::List));
     }
 
     #[test]
-    fn r_en_vue_detail_recharge_le_detail_et_pas_la_liste() {
-        let mut app = app_garnie(vec![pr(1)]);
-        let generation = ouvrir_detail(&mut app);
+    fn r_in_the_detail_view_reloads_the_detail_not_the_list() {
+        let mut app = app_with(vec![pr(1)]);
+        let generation = open_detail_of(&mut app);
         app.handle(Event::DetailLoaded {
             generation,
             key: pr(1).key,
@@ -2028,14 +2069,14 @@ pub(crate) mod tests {
             }] => {
                 assert!(*neuve > generation, "une nouvelle génération s'ouvre")
             }
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         }
     }
 
     #[test]
-    fn les_fleches_font_defiler_le_detail_sans_deborder() {
-        let mut app = app_garnie(vec![pr(1)]);
-        let generation = ouvrir_detail(&mut app);
+    fn the_arrows_scroll_the_detail_without_running_past() {
+        let mut app = app_with(vec![pr(1)]);
+        let generation = open_detail_of(&mut app);
         app.handle(Event::DetailLoaded {
             generation,
             key: pr(1).key,
@@ -2056,22 +2097,22 @@ pub(crate) mod tests {
         for _ in 0..500 {
             app.handle(Event::Key(Key::Down));
         }
-        let dernier = app.detail_scroll() as usize;
-        assert!(dernier > 0);
+        let last = app.detail_scroll() as usize;
+        assert!(last > 0);
         assert!(
-            dernier < app.detail_lines(u16::MAX).len(),
+            last < app.detail_lines(u16::MAX).len(),
             "défilement borné au contenu"
         );
     }
 
     #[test]
-    fn un_detail_perime_est_ignore() {
-        let mut app = app_garnie(vec![pr(1)]);
-        let premiere = ouvrir_detail(&mut app);
+    fn a_stale_detail_is_ignored() {
+        let mut app = app_with(vec![pr(1)]);
+        let first_one = open_detail_of(&mut app);
         // Rechargement : la réponse lente de la première arrive après.
         app.handle(Event::Key(Key::Char('r')));
         app.handle(Event::DetailLoaded {
-            generation: premiere,
+            generation: first_one,
             key: pr(1).key,
             result: Ok(detail(1)),
         });
@@ -2080,16 +2121,16 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn ouvrir_un_detail_ne_perime_pas_une_requete_de_liste_en_vol() {
-        let mut app = app_garnie(vec![pr(1), pr(2)]);
-        let generation_liste = match &app.handle(Event::Tick)[..] {
+    fn opening_a_detail_does_not_stale_a_list_request_in_flight() {
+        let mut app = app_with(vec![pr(1), pr(2)]);
+        let list_generation_id = match &app.handle(Event::Tick)[..] {
             [Command::FetchList { generation, .. }] => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
-        ouvrir_detail(&mut app);
+        open_detail_of(&mut app);
 
         app.handle(Event::ListLoaded {
-            generation: generation_liste,
+            generation: list_generation_id,
             result: Ok(page(vec![pr(1), pr(2), pr(3)])),
         });
         assert_eq!(app.prs.len(), 3, "le résultat de liste doit être accepté");
@@ -2097,9 +2138,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn un_rafraichissement_de_liste_ne_vide_pas_le_cache_des_details() {
-        let mut app = app_garnie(vec![pr(1)]);
-        let generation = ouvrir_detail(&mut app);
+    fn a_list_refresh_does_not_clear_the_detail_cache() {
+        let mut app = app_with(vec![pr(1)]);
+        let generation = open_detail_of(&mut app);
         app.handle(Event::DetailLoaded {
             generation,
             key: pr(1).key,
@@ -2107,7 +2148,7 @@ pub(crate) mod tests {
         });
         app.handle(Event::Key(Key::Left));
 
-        rafraichir(&mut app, vec![pr(1)]);
+        refresh_with(&mut app, vec![pr(1)]);
         assert!(
             app.details.contains_key(&pr(1).key),
             "le compromis est assumé : le détail reste en cache jusqu'à r"
@@ -2115,21 +2156,21 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn une_erreur_de_detail_est_reprise_telle_quelle() {
-        let mut app = app_garnie(vec![pr(1)]);
-        let generation = ouvrir_detail(&mut app);
+    fn a_detail_error_is_repeated_verbatim() {
+        let mut app = app_with(vec![pr(1)]);
+        let generation = open_detail_of(&mut app);
         app.handle(Event::DetailLoaded {
             generation,
             key: pr(1).key,
             result: Err(GithubError::Transport),
         });
-        assert_eq!(app.error.as_deref(), Some("Réseau injoignable."));
+        assert_eq!(app.error.as_deref(), Some("Network unreachable."));
         assert!(!app.loading.detail);
     }
 
     #[test]
-    fn o_ouvre_la_pr_selectionnee_dans_le_navigateur() {
-        let mut app = app_garnie(vec![pr(1), pr(2)]);
+    fn o_opens_the_selected_pr_in_the_browser() {
+        let mut app = app_with(vec![pr(1), pr(2)]);
         app.handle(Event::Key(Key::Down));
         assert_eq!(
             app.handle(Event::Key(Key::Char('o'))),
@@ -2140,10 +2181,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn o_en_vue_detail_ouvre_la_pr_affichee() {
-        let mut app = app_garnie(vec![pr(1), pr(2)]);
+    fn o_in_the_detail_view_opens_the_displayed_pr() {
+        let mut app = app_with(vec![pr(1), pr(2)]);
         app.handle(Event::Key(Key::Down));
-        ouvrir_detail(&mut app);
+        open_detail_of(&mut app);
         assert_eq!(
             app.handle(Event::Key(Key::Char('o'))),
             vec![Command::OpenInBrowser {
@@ -2154,20 +2195,20 @@ pub(crate) mod tests {
 
     /// Détail ouvert et chargé, puis PR retirée de la liste — fusionnée,
     /// fermée, ou sortie du filtre — alors que la vue reste affichée.
-    fn app_en_detail_hors_liste() -> App {
-        let mut app = app_garnie(vec![pr(1)]);
-        let generation = ouvrir_detail(&mut app);
+    fn app_in_detail_off_list() -> App {
+        let mut app = app_with(vec![pr(1)]);
+        let generation = open_detail_of(&mut app);
         app.handle(Event::DetailLoaded {
             generation,
             key: pr(1).key,
             result: Ok(detail(1)),
         });
-        let generation_liste = match &app.handle(Event::Tick)[..] {
+        let list_generation_id = match &app.handle(Event::Tick)[..] {
             [Command::FetchList { generation, .. }] => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         app.handle(Event::ListLoaded {
-            generation: generation_liste,
+            generation: list_generation_id,
             result: Ok(page(vec![])),
         });
         assert!(app.prs.is_empty(), "la PR a bien quitté la liste");
@@ -2175,8 +2216,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn o_ouvre_encore_une_pr_qui_a_quitte_la_liste() {
-        let mut app = app_en_detail_hors_liste();
+    fn o_still_opens_a_pr_that_left_the_list() {
+        let mut app = app_in_detail_off_list();
         assert_eq!(
             app.handle(Event::Key(Key::Char('o'))),
             vec![Command::OpenInBrowser {
@@ -2187,18 +2228,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn r_recharge_encore_une_pr_qui_a_quitte_la_liste() {
-        let mut app = app_en_detail_hors_liste();
+    fn r_still_reloads_a_pr_that_left_the_list() {
+        let mut app = app_in_detail_off_list();
         match &app.handle(Event::Key(Key::Char('r')))[..] {
             [Command::FetchDetail { summary, .. }] => assert_eq!(summary.key, pr(1).key),
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         }
     }
 
     #[test]
-    fn un_detail_devenu_plus_court_reborne_le_defilement() {
-        let mut app = app_garnie(vec![pr(1)]);
-        let generation = ouvrir_detail(&mut app);
+    fn a_shorter_detail_clamps_the_scroll_again() {
+        let mut app = app_with(vec![pr(1)]);
+        let generation = open_detail_of(&mut app);
         app.handle(Event::DetailLoaded {
             generation,
             key: pr(1).key,
@@ -2207,14 +2248,14 @@ pub(crate) mod tests {
         for _ in 0..500 {
             app.handle(Event::Key(Key::Down));
         }
-        let bas = app.detail_scroll();
-        assert!(bas > 0, "le défilement est bien descendu");
+        let bottom = app.detail_scroll();
+        assert!(bottom > 0, "le défilement est bien descendu");
 
         // Rechargement : la description et les échanges ont disparu, le
         // contenu est nettement plus court que le défilement en cours.
         let generation = match &app.handle(Event::Key(Key::Char('r')))[..] {
             [Command::FetchDetail { generation, .. }] => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         app.handle(Event::DetailLoaded {
             generation,
@@ -2229,33 +2270,33 @@ pub(crate) mod tests {
             }),
         });
 
-        assert!(app.detail_scroll() < bas, "le défilement a été ramené");
+        assert!(app.detail_scroll() < bottom, "le défilement a été ramené");
         assert!(
             (app.detail_scroll() as usize) < app.detail_line_count(),
             "sinon l'écran reste vide jusqu'à ce qu'on remonte : défilement \
-             {} pour {} lignes",
+             {} pour {} lines",
             app.detail_scroll(),
             app.detail_line_count()
         );
     }
 
     #[test]
-    fn o_sur_une_liste_vide_ne_fait_rien() {
-        let mut app = app_garnie(vec![]);
+    fn o_on_an_empty_list_does_nothing() {
+        let mut app = app_with(vec![]);
         assert!(app.handle(Event::Key(Key::Char('o'))).is_empty());
     }
 
     #[test]
-    fn m_est_reconnue_et_reste_sans_effet_jusqu_a_la_spec_04() {
-        let mut app = app_garnie(vec![pr(1)]);
-        let commandes = app.handle(Event::Key(Key::Char('m')));
-        assert!(commandes.is_empty(), "commandes = {commandes:?}");
+    fn m_is_recognised_and_stays_without_effect_until_spec_04() {
+        let mut app = app_with(vec![pr(1)]);
+        let commands = app.handle(Event::Key(Key::Char('m')));
+        assert!(commands.is_empty(), "commandes = {commands:?}");
         assert!(matches!(app.view, View::List), "aucun changement de vue");
         assert!(app.error.is_none(), "et aucun message d'erreur");
     }
 
     /// Réponse de liste portant un solde d'appels, pour les tests de suspension.
-    pub(crate) fn page_avec_solde(
+    pub(crate) fn page_with_remaining(
         pull_requests: Vec<PrSummary>,
         remaining: u32,
         reset_at: chrono::DateTime<chrono::Utc>,
@@ -2270,21 +2311,21 @@ pub(crate) mod tests {
     }
 
     /// Livre une réponse de liste donnée en respectant la génération en vol.
-    fn livrer(app: &mut App, generation: Generation, resultat: Result<ListPage, GithubError>) {
+    fn deliver(app: &mut App, generation: Generation, result: Result<ListPage, GithubError>) {
         app.handle(Event::ListLoaded {
             generation,
-            result: resultat,
+            result: result,
         });
     }
 
     #[test]
-    fn un_solde_epuise_suspend_le_minuteur() {
-        let (mut app, generation) = app_demarree();
-        let reprise = chrono::Utc::now() + chrono::Duration::minutes(30);
-        livrer(
+    fn an_exhausted_rate_limit_suspends_the_timer() {
+        let (mut app, generation) = app_started();
+        let resume_at = chrono::Utc::now() + chrono::Duration::minutes(30);
+        deliver(
             &mut app,
             generation,
-            Ok(page_avec_solde(vec![pr(1)], 0, reprise)),
+            Ok(page_with_remaining(vec![pr(1)], 0, resume_at)),
         );
         assert!(
             app.handle(Event::Tick).is_empty(),
@@ -2293,13 +2334,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn un_solde_non_nul_ne_suspend_rien() {
-        let (mut app, generation) = app_demarree();
-        let reprise = chrono::Utc::now() + chrono::Duration::minutes(30);
-        livrer(
+    fn a_non_zero_rate_limit_suspends_nothing() {
+        let (mut app, generation) = app_started();
+        let resume_at = chrono::Utc::now() + chrono::Duration::minutes(30);
+        deliver(
             &mut app,
             generation,
-            Ok(page_avec_solde(vec![pr(1)], 12, reprise)),
+            Ok(page_with_remaining(vec![pr(1)], 12, resume_at)),
         );
         assert!(
             !app.handle(Event::Tick).is_empty(),
@@ -2308,30 +2349,30 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn la_barre_d_etat_annonce_l_heure_de_reprise() {
-        let (mut app, generation) = app_demarree();
-        let reprise = chrono::Utc::now() + chrono::Duration::minutes(30);
-        livrer(
+    fn the_status_bar_announces_the_resume_time() {
+        let (mut app, generation) = app_started();
+        let resume_at = chrono::Utc::now() + chrono::Duration::minutes(30);
+        deliver(
             &mut app,
             generation,
-            Ok(page_avec_solde(vec![pr(1)], 0, reprise)),
+            Ok(page_with_remaining(vec![pr(1)], 0, resume_at)),
         );
-        let attendu = format!(
-            "limite d'appels atteinte, reprise à {}",
-            reprise.with_timezone(&Local).format("%H h %M")
+        let expected = format!(
+            "rate limit reached, resuming at {}",
+            resume_at.with_timezone(&Local).format("%H:%M")
         );
-        let ligne = app.status_line(CONFORTABLE);
-        assert!(ligne.contains(&attendu), "ligne = {ligne}");
+        let line = app.status_line(ROOMY);
+        assert!(line.contains(&expected), "ligne = {line}");
     }
 
     #[test]
-    fn la_touche_r_est_refusee_pendant_la_suspension() {
-        let (mut app, generation) = app_demarree();
-        let reprise = chrono::Utc::now() + chrono::Duration::minutes(30);
-        livrer(
+    fn the_r_key_is_refused_while_suspended() {
+        let (mut app, generation) = app_started();
+        let resume_at = chrono::Utc::now() + chrono::Duration::minutes(30);
+        deliver(
             &mut app,
             generation,
-            Ok(page_avec_solde(vec![pr(1)], 0, reprise)),
+            Ok(page_with_remaining(vec![pr(1)], 0, resume_at)),
         );
         assert!(
             app.handle(Event::Key(Key::Char('r'))).is_empty(),
@@ -2341,58 +2382,55 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn la_reprise_passee_rend_la_main_au_minuteur() {
-        let (mut app, generation) = app_demarree();
-        let reprise = chrono::Utc::now() - chrono::Duration::minutes(1);
-        livrer(
+    fn a_passed_resume_time_hands_control_back_to_the_timer() {
+        let (mut app, generation) = app_started();
+        let resume_at = chrono::Utc::now() - chrono::Duration::minutes(1);
+        deliver(
             &mut app,
             generation,
-            Ok(page_avec_solde(vec![pr(1)], 0, reprise)),
+            Ok(page_with_remaining(vec![pr(1)], 0, resume_at)),
         );
         assert!(
             !app.handle(Event::Tick).is_empty(),
             "l'heure de reprise passée, le rafraîchissement repart"
         );
-        let ligne = app.status_line(CONFORTABLE);
+        let line = app.status_line(ROOMY);
         assert!(
-            !ligne.contains("limite d'appels"),
-            "l'annonce disparaît avec la suspension : {ligne}"
+            !line.contains("limite d'appels"),
+            "l'annonce disparaît avec la suspension : {line}"
         );
     }
 
     #[test]
-    fn un_refus_pour_limite_suspend_au_lieu_d_afficher_l_erreur() {
-        let mut app = app_garnie(vec![pr(1)]);
+    fn a_rate_limit_refusal_suspends_instead_of_showing_the_error() {
+        let mut app = app_with(vec![pr(1)]);
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::FetchList { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
-        let reprise = chrono::Utc::now() + chrono::Duration::minutes(15);
-        livrer(
+        let resume_at = chrono::Utc::now() + chrono::Duration::minutes(15);
+        deliver(
             &mut app,
             generation,
             Err(GithubError::RateLimited {
-                reset_at: Some(reprise),
+                reset_at: Some(resume_at),
             }),
         );
         assert!(app.error.is_none(), "erreur = {:?}", app.error);
         assert_eq!(app.prs.len(), 1, "la liste précédente reste visible");
         assert!(app.handle(Event::Tick).is_empty());
-        let ligne = app.status_line(CONFORTABLE);
-        assert!(
-            ligne.contains("limite d'appels atteinte"),
-            "ligne = {ligne}"
-        );
+        let line = app.status_line(ROOMY);
+        assert!(line.contains("rate limit reached"), "ligne = {line}");
     }
 
     #[test]
-    fn un_refus_pour_limite_sans_heure_suspend_quand_meme() {
-        let mut app = app_garnie(vec![pr(1)]);
+    fn a_rate_limit_refusal_without_a_time_suspends_anyway() {
+        let mut app = app_with(vec![pr(1)]);
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::FetchList { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
-        livrer(
+        deliver(
             &mut app,
             generation,
             Err(GithubError::RateLimited { reset_at: None }),
@@ -2404,11 +2442,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn une_panne_reseau_laisse_la_liste_affichee() {
-        let mut app = app_garnie(vec![pr(1), pr(2)]);
+    fn a_network_failure_leaves_the_list_on_screen() {
+        let mut app = app_with(vec![pr(1), pr(2)]);
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::FetchList { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         app.handle(Event::ListLoaded {
             generation,
@@ -2419,9 +2457,9 @@ pub(crate) mod tests {
             !app.should_quit,
             "une panne réseau n'arrête pas le programme"
         );
-        assert_eq!(app.error.as_deref(), Some("Réseau injoignable."));
+        assert_eq!(app.error.as_deref(), Some("Network unreachable."));
         assert!(
-            app.status_line(CONFORTABLE).contains("Réseau injoignable."),
+            app.status_line(ROOMY).contains("Network unreachable."),
             "l'erreur s'affiche dans la barre d'état"
         );
         assert!(
@@ -2431,39 +2469,39 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn le_prochain_succes_efface_l_erreur() {
-        let mut app = app_garnie(vec![pr(1)]);
-        let echec = match &app.handle(Event::Key(Key::Char('r')))[0] {
+    fn the_next_success_clears_the_error() {
+        let mut app = app_with(vec![pr(1)]);
+        let failure = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::FetchList { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         app.handle(Event::ListLoaded {
-            generation: echec,
+            generation: failure,
             result: Err(GithubError::Transport),
         });
         assert!(app.error.is_some());
 
-        let succes = match &app.handle(Event::Key(Key::Char('r')))[0] {
+        let success = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::FetchList { generation, .. } => *generation,
-            autre => panic!("commande inattendue : {autre:?}"),
+            other => panic!("commande inattendue : {other:?}"),
         };
         app.handle(Event::ListLoaded {
-            generation: succes,
+            generation: success,
             result: Ok(page(vec![pr(1)])),
         });
         assert!(app.error.is_none(), "erreur = {:?}", app.error);
     }
 
     #[test]
-    fn un_refus_pour_limite_sur_le_detail_suspend_au_lieu_d_afficher_l_erreur() {
-        let mut app = app_garnie(vec![pr(1)]);
-        let generation = ouvrir_detail(&mut app);
-        let reprise = chrono::Utc::now() + chrono::Duration::minutes(15);
+    fn a_rate_limit_refusal_on_the_detail_suspends_instead_of_showing_the_error() {
+        let mut app = app_with(vec![pr(1)]);
+        let generation = open_detail_of(&mut app);
+        let resume_at = chrono::Utc::now() + chrono::Duration::minutes(15);
         app.handle(Event::DetailLoaded {
             generation,
             key: pr(1).key,
             result: Err(GithubError::RateLimited {
-                reset_at: Some(reprise),
+                reset_at: Some(resume_at),
             }),
         });
         assert!(app.error.is_none(), "erreur = {:?}", app.error);

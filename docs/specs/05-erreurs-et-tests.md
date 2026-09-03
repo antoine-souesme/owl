@@ -17,15 +17,15 @@ dans la barre d'état, et le prochain rafraîchissement retente.
 
 | Situation | Message |
 |---|---|
-| `gh` absent du `PATH` et aucune variable de jeton | « owl a besoin de gh. Installe-le, puis lance `gh auth login`. » |
-| `gh` présent mais non connecté | « Non connecté à GitHub. Lance `gh auth login`. » |
-| Jeton refusé (HTTP 401) | « Jeton refusé par GitHub. Lance `gh auth login` pour le renouveler. » |
-| Droits insuffisants (HTTP 403 qui n'est pas une limite d'appels) | « Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`. » |
-| Valeur de réglage invalide | « Réglages invalides dans <chemin> : <clé fautive>. » |
-| Fichier de réglages mal formé | « Réglages invalides dans <chemin> : syntaxe TOML invalide. » |
-| Fichier de réglages présent mais illisible | « Réglages invalides dans <chemin> : fichier illisible. » |
-| Liste de filtres vide, ou dont tous les éléments sont blancs | « Aucun filtre actif : la recherche ramènerait tout GitHub. » |
-| Dossier personnel introuvable | « Impossible de déterminer le dossier de configuration. » |
+| `gh` absent du `PATH` et aucune variable de jeton | « owl needs gh. Install it, then run `gh auth login`. » |
+| `gh` présent mais non connecté | « Not signed in to GitHub. Run `gh auth login`. » |
+| Jeton refusé (HTTP 401) | « Token refused by GitHub. Run `gh auth login` to renew it. » |
+| Droits insuffisants (HTTP 403 qui n'est pas une limite d'appels) | « The token lacks the required permissions. Check the `repo` scope. » |
+| Valeur de réglage invalide | « Invalid settings in \<chemin\>: \<clé fautive\>. » |
+| Fichier de réglages mal formé | « Invalid settings in \<chemin\>: invalid TOML syntax. » |
+| Fichier de réglages présent mais illisible | « Invalid settings in \<chemin\>: unreadable file. » |
+| Liste de filtres vide, ou dont tous les éléments sont blancs | « No active filter: the search would return all of GitHub. » |
+| Dossier personnel introuvable | « Cannot determine the configuration directory. » |
 
 Les trois cas de réglages sont distincts parce qu'ils n'apprennent pas la même
 chose : une valeur refusée peut nommer sa clé, un fichier syntaxiquement faux n'a
@@ -52,8 +52,8 @@ en `04-fusion.md`.
 
 Le champ `rateLimit` est lu à chaque requête réussie. Quand le solde restant tombe à
 zéro, `owl` suspend le rafraîchissement automatique jusqu'à l'heure de
-réinitialisation, et la barre d'état l'annonce : « limite d'appels atteinte,
-reprise à 14 h 32 ». La touche `r` est refusée pendant cette suspension, avec le même
+réinitialisation, et la barre d'état l'annonce : « rate limit reached, resuming at
+14:32 ». La touche `r` est refusée pendant cette suspension, avec le même
 message. `owl` ne réessaie jamais en boucle une requête refusée pour cause de limite.
 
 Quand GitHub refuse un solde de limite primaire épuisé sans que l'en-tête
@@ -79,7 +79,7 @@ Le mode brut et l'écran alterné sont restaurés par un garde de portée, doubl
 crochet de panique. Un plantage laisse un terminal utilisable et affiche la trace
 d'erreur normalement.
 
-Un terminal trop étroit pour la liste affiche « Élargis le terminal » plutôt qu'un
+Un terminal trop étroit pour la liste affiche « Widen the terminal » plutôt qu'un
 affichage tronqué au hasard.
 
 ## Tests
