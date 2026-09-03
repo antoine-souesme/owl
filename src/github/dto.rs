@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use crate::model::{
     ChangedFile, CheckRun, ChecksState, Comment, ListPage, MergeableState, PrDetail, PrKey,
-    PrSummary, RateLimit, RepoMergeRules, Review, ReviewState, AUTEUR_INCONNU,
+    PrSummary, RateLimit, RepoMergeRules, Review, ReviewState, UNKNOWN_AUTHOR,
 };
 
 /// Contenu du champ `data` de la requête de liste.
@@ -193,9 +193,9 @@ impl ListData {
                 .flatten()
                 .filter_map(SearchNode::to_summary)
                 .collect(),
-            rate_limit: self.rate_limit.as_ref().map(|limite| RateLimit {
-                remaining: limite.remaining,
-                reset_at: limite.reset_at,
+            rate_limit: self.rate_limit.as_ref().map(|limit| RateLimit {
+                remaining: limit.remaining,
+                reset_at: limit.reset_at,
             }),
         }
     }
@@ -221,7 +221,7 @@ impl SearchNode {
                 .author
                 .as_ref()
                 .map(|auteur| auteur.login.clone())
-                .unwrap_or_else(|| AUTEUR_INCONNU.to_string()),
+                .unwrap_or_else(|| UNKNOWN_AUTHOR.to_string()),
             url,
             is_draft: self.is_draft.unwrap_or(false),
             checks: rollup_state(self.commits.as_ref()),
@@ -244,7 +244,7 @@ impl SearchNode {
 fn rollup_state(commits: Option<&CommitConnection>) -> ChecksState {
     let rollup = commits
         .and_then(|connexion| connexion.nodes.first())
-        .and_then(|noeud| noeud.commit.status_check_rollup.as_ref());
+        .and_then(|node| node.commit.status_check_rollup.as_ref());
     match rollup {
         Some(rollup) => checks_from_rollup(rollup.state.as_deref()),
         None => ChecksState::None,
@@ -283,11 +283,11 @@ impl PullRequestDetail {
     /// Assemble la vue détail autour du résumé déjà connu : la requête de
     /// détail ne renvoie aucun des champs de la liste.
     pub fn to_detail(&self, summary: PrSummary) -> PrDetail {
-        let contextes = self
+        let contexts = self
             .commits
             .as_ref()
             .and_then(|connexion| connexion.nodes.first())
-            .and_then(|noeud| noeud.commit.status_check_rollup.as_ref())
+            .and_then(|node| node.commit.status_check_rollup.as_ref())
             .and_then(|rollup| rollup.contexts.as_ref());
 
         PrDetail {
@@ -296,7 +296,7 @@ impl PullRequestDetail {
             body: self.body.clone().unwrap_or_default(),
             head_ref: self.head_ref_name.clone(),
             base_ref: self.base_ref_name.clone(),
-            checks: contextes
+            checks: contexts
                 .map(|connexion| {
                     connexion
                         .nodes
@@ -338,10 +338,10 @@ impl PullRequestDetail {
                         .nodes
                         .iter()
                         .flatten()
-                        .map(|fichier| ChangedFile {
-                            path: fichier.path.clone(),
-                            additions: fichier.additions,
-                            deletions: fichier.deletions,
+                        .map(|file| ChangedFile {
+                            path: file.path.clone(),
+                            additions: file.additions,
+                            deletions: file.deletions,
                         })
                         .collect()
                 })
@@ -377,7 +377,7 @@ impl ReviewNode {
     /// elle n'a rien à dire à l'écran.
     pub fn to_review(&self) -> Option<Review> {
         Some(Review {
-            author: login_ou_inconnu(self.author.as_ref()),
+            author: login_or_unknown(self.author.as_ref()),
             state: review_from_review_state(self.state.as_deref()),
             body: self.body.clone().unwrap_or_default(),
             submitted_at: self.submitted_at?,
@@ -388,7 +388,7 @@ impl ReviewNode {
 impl CommentNode {
     pub fn to_comment(&self) -> Option<Comment> {
         Some(Comment {
-            author: login_ou_inconnu(self.author.as_ref()),
+            author: login_or_unknown(self.author.as_ref()),
             body: self.body.clone().unwrap_or_default(),
             created_at: self.created_at?,
         })
@@ -397,10 +397,10 @@ impl CommentNode {
 
 /// Auteur d'une relecture ou d'un commentaire, « inconnu » si le compte a été
 /// supprimé.
-fn login_ou_inconnu(auteur: Option<&Actor>) -> String {
+fn login_or_unknown(auteur: Option<&Actor>) -> String {
     auteur
         .map(|auteur| auteur.login.clone())
-        .unwrap_or_else(|| AUTEUR_INCONNU.to_string())
+        .unwrap_or_else(|| UNKNOWN_AUTHOR.to_string())
 }
 
 /// Un `CheckRun` en cours n'a pas encore de conclusion : son état vient de
@@ -436,43 +436,43 @@ mod tests {
 
     /// Enveloppe de la réponse enregistrée, dont seul `data` nous intéresse.
     #[derive(Deserialize)]
-    struct Enveloppe {
+    struct Envelope {
         data: ListData,
     }
 
-    const REPONSE: &str = include_str!("../../tests/fixtures/list.json");
+    const RESPONSE: &str = include_str!("../../tests/fixtures/list.json");
 
     fn page() -> ListPage {
-        serde_json::from_str::<Enveloppe>(REPONSE)
+        serde_json::from_str::<Envelope>(RESPONSE)
             .expect("la réponse enregistrée doit se lire")
             .data
             .to_list_page()
     }
 
     #[test]
-    fn la_reponse_enregistree_donne_la_premiere_pull_request_exacte() {
+    fn the_recorded_response_gives_the_first_pull_request_exactly() {
         let page = page();
-        let premiere = &page.pull_requests[0];
+        let first_one = &page.pull_requests[0];
         assert_eq!(
-            premiere.key,
+            first_one.key,
             PrKey {
                 repo: "moi/owl".to_string(),
                 number: 42
             }
         );
-        assert_eq!(premiere.title, "Ajoute la fenêtre de fusion");
-        assert_eq!(premiere.author, "moi");
-        assert_eq!(premiere.url, "https://github.com/moi/owl/pull/42");
-        assert!(!premiere.is_draft);
-        assert_eq!(premiere.checks, ChecksState::Success);
-        assert_eq!(premiere.review, ReviewState::Approved);
-        assert_eq!(premiere.mergeable, MergeableState::Mergeable);
+        assert_eq!(first_one.title, "Ajoute la fenêtre de fusion");
+        assert_eq!(first_one.author, "moi");
+        assert_eq!(first_one.url, "https://github.com/moi/owl/pull/42");
+        assert!(!first_one.is_draft);
+        assert_eq!(first_one.checks, ChecksState::Success);
+        assert_eq!(first_one.review, ReviewState::Approved);
+        assert_eq!(first_one.mergeable, MergeableState::Mergeable);
         assert_eq!(
-            premiere.updated_at.to_rfc3339(),
+            first_one.updated_at.to_rfc3339(),
             "2026-08-30T09:12:44+00:00"
         );
         assert_eq!(
-            premiere.repo_rules,
+            first_one.repo_rules,
             RepoMergeRules {
                 squash: true,
                 merge: false,
@@ -483,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn un_noeud_d_issue_est_ignore_sans_faire_echouer_la_traduction() {
+    fn an_issue_node_is_skipped_without_failing_the_translation() {
         assert_eq!(
             page().pull_requests.len(),
             5,
@@ -492,27 +492,27 @@ mod tests {
     }
 
     #[test]
-    fn une_pr_sans_aucune_ci_donne_none_et_non_pending() {
+    fn a_pr_without_any_ci_gives_none_not_pending() {
         let page = page();
-        let sans_commit = &page.pull_requests[1];
-        assert_eq!(sans_commit.key.number, 7);
-        assert_eq!(sans_commit.checks, ChecksState::None);
+        let without_commit = &page.pull_requests[1];
+        assert_eq!(without_commit.key.number, 7);
+        assert_eq!(without_commit.checks, ChecksState::None);
 
-        let sans_rollup = &page.pull_requests[4];
-        assert_eq!(sans_rollup.key.number, 3);
-        assert_eq!(sans_rollup.checks, ChecksState::None);
+        let without_rollup = &page.pull_requests[4];
+        assert_eq!(without_rollup.key.number, 3);
+        assert_eq!(without_rollup.checks, ChecksState::None);
     }
 
     #[test]
-    fn les_etats_sont_traduits_un_a_un() {
+    fn the_states_are_translated_one_by_one() {
         let page = page();
-        let etats: Vec<(ChecksState, ReviewState, MergeableState)> = page
+        let states: Vec<(ChecksState, ReviewState, MergeableState)> = page
             .pull_requests
             .iter()
             .map(|pr| (pr.checks, pr.review, pr.mergeable))
             .collect();
         assert_eq!(
-            etats,
+            states,
             vec![
                 (
                     ChecksState::Success,
@@ -544,26 +544,26 @@ mod tests {
     }
 
     #[test]
-    fn un_auteur_supprime_devient_inconnu() {
+    fn a_deleted_author_becomes_unknown() {
         assert_eq!(page().pull_requests[1].author, "inconnu");
     }
 
     #[test]
-    fn un_brouillon_est_marque_comme_tel() {
+    fn a_draft_is_marked_as_such() {
         let page = page();
         assert!(page.pull_requests[1].is_draft);
         assert!(!page.pull_requests[0].is_draft);
     }
 
     #[test]
-    fn le_solde_d_appels_est_lu() {
-        let limite = page().rate_limit.expect("le solde est présent");
-        assert_eq!(limite.remaining, 4987);
-        assert_eq!(limite.reset_at.to_rfc3339(), "2026-08-30T10:00:00+00:00");
+    fn the_rate_limit_is_read() {
+        let limit = page().rate_limit.expect("le solde est présent");
+        assert_eq!(limit.remaining, 4987);
+        assert_eq!(limit.reset_at.to_rfc3339(), "2026-08-30T10:00:00+00:00");
     }
 
     #[derive(Deserialize)]
-    struct EnveloppeDetail {
+    struct DetailEnvelope {
         data: DetailData,
     }
 
@@ -571,23 +571,23 @@ mod tests {
 
     /// Résumé quelconque : la requête de détail n'en renvoie aucun champ, le
     /// détail est assemblé autour de celui que la liste a déjà donné.
-    fn resume() -> crate::model::PrSummary {
+    fn summary() -> crate::model::PrSummary {
         page().pull_requests[0].clone()
     }
 
     fn detail() -> PrDetail {
-        serde_json::from_str::<EnveloppeDetail>(DETAIL)
+        serde_json::from_str::<DetailEnvelope>(DETAIL)
             .expect("la réponse enregistrée doit se lire")
             .data
             .repository
             .expect("dépôt présent")
             .pull_request
             .expect("pull request présente")
-            .to_detail(resume())
+            .to_detail(summary())
     }
 
     #[test]
-    fn le_detail_reprend_les_champs_de_la_pull_request() {
+    fn the_detail_carries_over_the_pull_request_fields() {
         let detail = detail();
         assert_eq!(detail.node_id, "PR_kwDOABCD12345");
         assert_eq!(
@@ -598,11 +598,11 @@ mod tests {
         assert_eq!(detail.base_ref, "develop");
         assert_eq!(detail.additions, 214);
         assert_eq!(detail.deletions, 37);
-        assert_eq!(detail.summary, resume());
+        assert_eq!(detail.summary, summary());
     }
 
     #[test]
-    fn les_deux_formes_de_verification_donnent_des_entrees_equivalentes() {
+    fn both_shapes_of_check_give_equivalent_entries() {
         assert_eq!(
             detail().checks,
             vec![
@@ -637,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn les_relectures_sont_traduites_et_celles_en_attente_ignorees() {
+    fn the_reviews_are_translated_and_the_pending_ones_ignored() {
         let detail = detail();
         assert_eq!(
             detail.reviews.len(),
@@ -656,7 +656,7 @@ mod tests {
     }
 
     #[test]
-    fn les_commentaires_et_les_fichiers_sont_traduits() {
+    fn the_comments_and_the_files_are_translated() {
         let detail = detail();
         assert_eq!(detail.comments.len(), 1);
         assert_eq!(detail.comments[0].author, "moi");

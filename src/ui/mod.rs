@@ -10,22 +10,22 @@ use ratatui::Frame;
 use crate::app::{App, Tone, View};
 
 pub fn draw(frame: &mut Frame, app: &App) {
-    let zone = frame.area();
+    let area = frame.area();
     match app.view {
-        View::List => list::draw(frame, zone, app),
-        View::Detail { .. } => detail::draw(frame, zone, app),
+        View::List => list::draw(frame, area, app),
+        View::Detail { .. } => detail::draw(frame, area, app),
     }
     // Par-dessus la vue courante, et après elle : la fenêtre est modale.
-    if let Some(rendu) = app.merge_render(zone.width) {
-        merge::draw(frame, zone, &rendu);
+    if let Some(render) = app.merge_render(area.width) {
+        merge::draw(frame, area, &render);
     }
 }
 
-pub(crate) fn couleur(ton: Tone) -> Color {
-    match ton {
-        Tone::Vert => Color::Green,
-        Tone::Rouge => Color::Red,
-        Tone::Jaune => Color::Yellow,
-        Tone::Gris => Color::DarkGray,
+pub(crate) fn color(tone: Tone) -> Color {
+    match tone {
+        Tone::Green => Color::Green,
+        Tone::Red => Color::Red,
+        Tone::Yellow => Color::Yellow,
+        Tone::Gray => Color::DarkGray,
     }
 }

@@ -20,10 +20,10 @@ pub enum FirstResponse<T> {
 
 pub fn classify<T>(result: Result<T, GithubError>) -> FirstResponse<T> {
     match result {
-        Err(erreur @ (GithubError::Unauthorized | GithubError::Forbidden)) => {
-            FirstResponse::Fatal(erreur.to_string())
+        Err(error @ (GithubError::Unauthorized | GithubError::Forbidden)) => {
+            FirstResponse::Fatal(error.to_string())
         }
-        autre => FirstResponse::Start(autre),
+        other => FirstResponse::Start(other),
     }
 }
 
@@ -32,21 +32,21 @@ mod tests {
     use super::*;
 
     /// Rend le message d'une réponse fatale, ou échoue si elle ne l'est pas.
-    fn message_fatal(reponse: FirstResponse<u8>) -> String {
-        match reponse {
+    fn fatal_message(response: FirstResponse<u8>) -> String {
+        match response {
             FirstResponse::Fatal(message) => message,
             FirstResponse::Start(_) => panic!("cette réponse devait être fatale"),
         }
     }
 
     /// Vrai si la réponse laisse démarrer.
-    fn demarre(reponse: FirstResponse<u8>) -> bool {
-        matches!(reponse, FirstResponse::Start(_))
+    fn starts(response: FirstResponse<u8>) -> bool {
+        matches!(response, FirstResponse::Start(_))
     }
 
     #[test]
-    fn un_jeton_refuse_empeche_le_demarrage() {
-        let message = message_fatal(classify::<u8>(Err(GithubError::Unauthorized)));
+    fn a_refused_token_prevents_startup() {
+        let message = fatal_message(classify::<u8>(Err(GithubError::Unauthorized)));
         assert_eq!(
             message,
             "Jeton refusé par GitHub. Lance `gh auth login` pour le renouveler."
@@ -54,8 +54,8 @@ mod tests {
     }
 
     #[test]
-    fn des_droits_insuffisants_empechent_le_demarrage() {
-        let message = message_fatal(classify::<u8>(Err(GithubError::Forbidden)));
+    fn insufficient_permissions_prevent_startup() {
+        let message = fatal_message(classify::<u8>(Err(GithubError::Forbidden)));
         assert_eq!(
             message,
             "Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`."
@@ -63,24 +63,24 @@ mod tests {
     }
 
     #[test]
-    fn un_reseau_injoignable_laisse_demarrer() {
-        assert!(demarre(classify::<u8>(Err(GithubError::Transport))));
+    fn an_unreachable_network_still_lets_owl_start() {
+        assert!(starts(classify::<u8>(Err(GithubError::Transport))));
     }
 
     #[test]
-    fn une_limite_d_appels_laisse_demarrer() {
-        assert!(demarre(classify::<u8>(Err(GithubError::RateLimited {
+    fn a_rate_limit_still_lets_owl_start() {
+        assert!(starts(classify::<u8>(Err(GithubError::RateLimited {
             reset_at: None
         }))));
     }
 
     #[test]
-    fn une_reponse_illisible_laisse_demarrer() {
-        assert!(demarre(classify::<u8>(Err(GithubError::Malformed))));
+    fn an_unreadable_response_still_lets_owl_start() {
+        assert!(starts(classify::<u8>(Err(GithubError::Malformed))));
     }
 
     #[test]
-    fn une_reponse_reussie_laisse_demarrer() {
-        assert!(demarre(classify::<u8>(Ok(7))));
+    fn a_successful_response_lets_owl_start() {
+        assert!(starts(classify::<u8>(Ok(7))));
     }
 }

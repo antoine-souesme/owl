@@ -24,10 +24,10 @@ pub enum Filter {
 }
 
 /// Toujours en tête : `search` de type `ISSUE` ramène aussi des issues.
-const PREFIXE: &str = "is:pr";
+const PREFIX: &str = "is:pr";
 
 /// Toujours en queue : les pull requests récemment actives arrivent en premier.
-const SUFFIXE: &str = "sort:updated-desc";
+const SUFFIX: &str = "sort:updated-desc";
 
 impl Filter {
     /// Fragment de requête de recherche GitHub.
@@ -39,11 +39,11 @@ impl Filter {
             Filter::Open => "is:open".to_string(),
             Filter::Draft(true) => "draft:true".to_string(),
             Filter::Draft(false) => "draft:false".to_string(),
-            Filter::Org(organisation) => format!("org:{organisation}"),
-            Filter::Repo(depot) => format!("repo:{depot}"),
+            Filter::Org(org) => format!("org:{org}"),
+            Filter::Repo(repo) => format!("repo:{repo}"),
             // Les guillemets sont nécessaires : un libellé peut porter une
             // espace, qui séparerait sinon deux termes de recherche.
-            Filter::Label(libelle) => format!("label:\"{libelle}\""),
+            Filter::Label(label) => format!("label:\"{label}\""),
             Filter::Raw(expression) => expression.clone(),
         }
     }
@@ -51,10 +51,10 @@ impl Filter {
     /// Reconnaît une chaîne du fichier de réglages. Une chaîne non reconnue
     /// devient `Raw`, ce qui la transmet à GitHub telle quelle : mieux vaut
     /// une expression que `owl` ne comprend pas qu'un filtre perdu.
-    pub fn parse(texte: &str) -> Filter {
-        let texte = texte.trim();
+    pub fn parse(text: &str) -> Filter {
+        let text = text.trim();
 
-        match texte {
+        match text {
             "author:@me" => return Filter::AuthoredByMe,
             "review-requested:@me" => return Filter::ReviewRequestedFromMe,
             "assignee:@me" => return Filter::AssignedToMe,
@@ -66,22 +66,22 @@ impl Filter {
 
         // Filtres à valeur. Un préfixe sans valeur n'est pas un filtre : il
         // part en `Raw` plutôt que de fabriquer un `org:` vide.
-        for (prefixe, construire) in [
+        for (prefix, build) in [
             ("org:", Filter::Org as fn(String) -> Filter),
             ("repo:", Filter::Repo as fn(String) -> Filter),
             ("label:", Filter::Label as fn(String) -> Filter),
         ] {
-            if let Some(valeur) = texte.strip_prefix(prefixe) {
+            if let Some(value) = text.strip_prefix(prefix) {
                 // Les guillemets sont la forme que produit `fragment` ; les
                 // retirer ici est ce qui rend l'aller-retour fidèle.
-                let valeur = valeur.trim_matches('"');
-                if !valeur.is_empty() {
-                    return construire(valeur.to_string());
+                let value = value.trim_matches('"');
+                if !value.is_empty() {
+                    return build(value.to_string());
                 }
             }
         }
 
-        Filter::Raw(texte.to_string())
+        Filter::Raw(text.to_string())
     }
 }
 
@@ -90,16 +90,16 @@ impl Filter {
 /// Les fragments vides sont écartés : une chaîne blanche dans les réglages
 /// laisserait sinon une double espace au milieu de la requête.
 pub fn build_query(filters: &[Filter]) -> String {
-    let mut morceaux = Vec::with_capacity(filters.len() + 2);
-    morceaux.push(PREFIXE.to_string());
-    morceaux.extend(
+    let mut parts = Vec::with_capacity(filters.len() + 2);
+    parts.push(PREFIX.to_string());
+    parts.extend(
         filters
             .iter()
             .map(Filter::fragment)
             .filter(|fragment| !fragment.is_empty()),
     );
-    morceaux.push(SUFFIXE.to_string());
-    morceaux.join(" ")
+    parts.push(SUFFIX.to_string());
+    parts.join(" ")
 }
 
 #[cfg(test)]
@@ -107,8 +107,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chaque_filtre_donne_le_fragment_de_la_spec() {
-        let cas = [
+    fn each_filter_yields_the_fragment_from_the_spec() {
+        let cases = [
             (Filter::AuthoredByMe, "author:@me"),
             (Filter::ReviewRequestedFromMe, "review-requested:@me"),
             (Filter::AssignedToMe, "assignee:@me"),
@@ -123,13 +123,13 @@ mod tests {
                 "involves:@me -is:draft",
             ),
         ];
-        for (filtre, attendu) in cas {
-            assert_eq!(filtre.fragment(), attendu, "filtre = {filtre:?}");
+        for (filter, expected) in cases {
+            assert_eq!(filter.fragment(), expected, "filtre = {filter:?}");
         }
     }
 
     #[test]
-    fn un_libelle_a_espaces_reste_entre_guillemets() {
+    fn a_label_with_spaces_stays_quoted() {
         assert_eq!(
             Filter::Label("needs review".to_string()).fragment(),
             "label:\"needs review\""
@@ -137,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn les_filtres_par_defaut_donnent_la_chaine_de_la_spec() {
+    fn the_default_filters_give_the_string_from_the_spec() {
         assert_eq!(
             build_query(&[Filter::AuthoredByMe, Filter::Open]),
             "is:pr author:@me is:open sort:updated-desc"
@@ -145,9 +145,9 @@ mod tests {
     }
 
     #[test]
-    fn la_requete_porte_toujours_is_pr_en_tete_et_le_tri_en_queue() {
-        let requete = build_query(&[Filter::Repo("acme/owl".to_string())]);
-        assert_eq!(requete, "is:pr repo:acme/owl sort:updated-desc");
+    fn the_query_always_carries_is_pr_first_and_the_sort_last() {
+        let query = build_query(&[Filter::Repo("acme/owl".to_string())]);
+        assert_eq!(query, "is:pr repo:acme/owl sort:updated-desc");
 
         // Y compris sans aucun filtre : la fonction reste totale. Le refus
         // d'une liste vide appartient à `config`, qui l'applique au démarrage.
@@ -155,36 +155,40 @@ mod tests {
     }
 
     #[test]
-    fn l_ordre_des_filtres_ne_change_pas_l_ensemble_ramene() {
-        let un = build_query(&[Filter::AuthoredByMe, Filter::Open, Filter::Draft(false)]);
-        let autre = build_query(&[Filter::Draft(false), Filter::Open, Filter::AuthoredByMe]);
+    fn the_order_of_the_filters_does_not_change_the_set_returned() {
+        let first = build_query(&[Filter::AuthoredByMe, Filter::Open, Filter::Draft(false)]);
+        let second = build_query(&[Filter::Draft(false), Filter::Open, Filter::AuthoredByMe]);
 
-        let cadre = |requete: &str| {
-            let mots: Vec<String> = requete.split(' ').map(str::to_string).collect();
-            (mots.first().cloned(), mots.last().cloned())
+        let bounds = |query: &str| {
+            let words: Vec<String> = query.split(' ').map(str::to_string).collect();
+            (words.first().cloned(), words.last().cloned())
         };
-        assert_eq!(cadre(&un), cadre(&autre), "is:pr en tête, tri en queue");
-
-        let mut mots_un: Vec<&str> = un.split(' ').collect();
-        let mut mots_autre: Vec<&str> = autre.split(' ').collect();
-        mots_un.sort_unstable();
-        mots_autre.sort_unstable();
         assert_eq!(
-            mots_un, mots_autre,
+            bounds(&first),
+            bounds(&second),
+            "is:pr en tête, tri en queue"
+        );
+
+        let mut words_first: Vec<&str> = first.split(' ').collect();
+        let mut words_second: Vec<&str> = second.split(' ').collect();
+        words_first.sort_unstable();
+        words_second.sort_unstable();
+        assert_eq!(
+            words_first, words_second,
             "les deux requêtes portent les mêmes termes, donc ramènent le même ensemble"
         );
     }
 
     #[test]
-    fn un_fragment_vide_ne_laisse_pas_de_double_espace() {
-        let requete = build_query(&[Filter::Raw(String::new()), Filter::Open]);
-        assert_eq!(requete, "is:pr is:open sort:updated-desc");
-        assert!(!requete.contains("  "), "requete = {requete}");
+    fn an_empty_fragment_leaves_no_double_space() {
+        let query = build_query(&[Filter::Raw(String::new()), Filter::Open]);
+        assert_eq!(query, "is:pr is:open sort:updated-desc");
+        assert!(!query.contains("  "), "requete = {query}");
     }
 
     #[test]
-    fn chaque_fragment_de_la_spec_se_relit_en_son_filtre() {
-        let cas = [
+    fn each_fragment_from_the_spec_parses_back_to_its_filter() {
+        let cases = [
             ("author:@me", Filter::AuthoredByMe),
             ("review-requested:@me", Filter::ReviewRequestedFromMe),
             ("assignee:@me", Filter::AssignedToMe),
@@ -195,14 +199,14 @@ mod tests {
             ("repo:acme/owl", Filter::Repo("acme/owl".to_string())),
             ("label:\"bug\"", Filter::Label("bug".to_string())),
         ];
-        for (texte, attendu) in cas {
-            assert_eq!(Filter::parse(texte), attendu, "texte = {texte}");
+        for (text, expected) in cases {
+            assert_eq!(Filter::parse(text), expected, "texte = {text}");
         }
     }
 
     #[test]
-    fn un_filtre_se_relit_depuis_son_propre_fragment() {
-        let filtres = [
+    fn a_filter_parses_back_from_its_own_fragment() {
+        let filters = [
             Filter::AuthoredByMe,
             Filter::ReviewRequestedFromMe,
             Filter::AssignedToMe,
@@ -213,48 +217,48 @@ mod tests {
             Filter::Repo("acme/owl".to_string()),
             Filter::Label("needs review".to_string()),
         ];
-        for filtre in filtres {
+        for filter in filters {
             assert_eq!(
-                Filter::parse(&filtre.fragment()),
-                filtre,
-                "aller-retour cassé pour {filtre:?}"
+                Filter::parse(&filter.fragment()),
+                filter,
+                "aller-retour cassé pour {filter:?}"
             );
         }
     }
 
     #[test]
-    fn un_libelle_sans_guillemets_est_accepte() {
+    fn an_unquoted_label_is_accepted() {
         assert_eq!(Filter::parse("label:bug"), Filter::Label("bug".to_string()));
     }
 
     #[test]
-    fn une_chaine_inconnue_devient_raw_et_reste_intacte() {
-        let inconnue = "involves:@me -is:draft";
-        assert_eq!(Filter::parse(inconnue), Filter::Raw(inconnue.to_string()));
+    fn an_unknown_string_becomes_raw_and_stays_intact() {
+        let unknown = "involves:@me -is:draft";
+        assert_eq!(Filter::parse(unknown), Filter::Raw(unknown.to_string()));
         assert!(
-            build_query(&[Filter::parse(inconnue)]).contains(inconnue),
+            build_query(&[Filter::parse(unknown)]).contains(unknown),
             "l'expression doit traverser la requête sans retouche"
         );
     }
 
     #[test]
-    fn un_prefixe_sans_valeur_reste_raw() {
-        for texte in ["org:", "repo:", "label:", "draft:peut-etre", "is:closed"] {
+    fn a_prefix_without_a_value_stays_raw() {
+        for text in ["org:", "repo:", "label:", "draft:peut-etre", "is:closed"] {
             assert_eq!(
-                Filter::parse(texte),
-                Filter::Raw(texte.to_string()),
-                "texte = {texte}"
+                Filter::parse(text),
+                Filter::Raw(text.to_string()),
+                "texte = {text}"
             );
         }
     }
 
     #[test]
-    fn les_espaces_autour_d_un_filtre_sont_ignorees() {
+    fn spaces_around_a_filter_are_ignored() {
         assert_eq!(Filter::parse("  is:open  "), Filter::Open);
     }
 
     #[test]
-    fn is_pr_ecrit_dans_les_reglages_apparait_deux_fois_dans_la_requete() {
+    fn is_pr_written_in_the_settings_appears_twice_in_the_query() {
         assert_eq!(
             build_query(&[Filter::parse("is:pr")]),
             "is:pr is:pr sort:updated-desc"

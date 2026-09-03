@@ -11,51 +11,51 @@ use ratatui::Frame;
 use crate::app::MergeRender;
 
 /// Marge intérieure de chaque côté, en plus des deux colonnes de bordure.
-const MARGE: u16 = 2;
+const MARGIN: u16 = 2;
 
-pub fn draw(frame: &mut Frame, area: Rect, rendu: &MergeRender) {
-    let contenu = rendu
+pub fn draw(frame: &mut Frame, area: Rect, render: &MergeRender) {
+    let content = render
         .lines
         .iter()
-        .map(|ligne| ligne.chars().count())
+        .map(|line| line.chars().count())
         .max()
         .unwrap_or(0);
-    let contenu = contenu.max(rendu.title.chars().count());
+    let content = content.max(render.title.chars().count());
 
     // Deux colonnes de bordure, deux marges de chaque côté. `app` a déjà
     // replié les lignes contre la largeur disponible : ce `.min` est un
     // filet de sécurité, pas un repli.
-    let largeur = u16::try_from(contenu + 2 + 2 * MARGE as usize)
+    let width = u16::try_from(content + 2 + 2 * MARGIN as usize)
         .unwrap_or(u16::MAX)
         .min(area.width);
-    let hauteur = u16::try_from(rendu.lines.len() + 2)
+    let height = u16::try_from(render.lines.len() + 2)
         .unwrap_or(u16::MAX)
         .min(area.height);
 
-    let zone = Rect {
-        x: area.x + (area.width.saturating_sub(largeur)) / 2,
-        y: area.y + (area.height.saturating_sub(hauteur)) / 2,
-        width: largeur,
-        height: hauteur,
+    let area = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width: width,
+        height: height,
     };
 
     // `Clear` d'abord : sans lui, la liste resterait visible sous la fenêtre.
-    frame.render_widget(Clear, zone);
+    frame.render_widget(Clear, area);
 
-    let cadre = Block::default()
+    let block = Block::default()
         .borders(Borders::ALL)
-        .title(rendu.title.clone());
-    let interieur = cadre.inner(zone);
-    frame.render_widget(cadre, zone);
+        .title(render.title.clone());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    let texte = rendu.lines.join("\n");
+    let text = render.lines.join("\n");
     frame.render_widget(
-        Paragraph::new(texte),
+        Paragraph::new(text),
         Rect {
-            x: interieur.x + MARGE.min(interieur.width),
-            y: interieur.y,
-            width: interieur.width.saturating_sub(2 * MARGE),
-            height: interieur.height,
+            x: inner.x + MARGIN.min(inner.width),
+            y: inner.y,
+            width: inner.width.saturating_sub(2 * MARGIN),
+            height: inner.height,
         },
     );
 }

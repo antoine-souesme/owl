@@ -76,9 +76,9 @@ pub fn load() -> Result<Config, ConfigError> {
 pub fn load_from(path: &Path) -> Result<Config, ConfigError> {
     let affichage = path.display().to_string();
 
-    let texte = match std::fs::read_to_string(path) {
-        Ok(texte) => texte,
-        Err(erreur) if erreur.kind() == std::io::ErrorKind::NotFound => {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(Config::default());
         }
         Err(_) => {
@@ -86,46 +86,46 @@ pub fn load_from(path: &Path) -> Result<Config, ConfigError> {
         }
     };
 
-    let table: toml::Table = toml::from_str(&texte).map_err(|_| ConfigError::Syntax {
+    let document: toml::Table = toml::from_str(&text).map_err(|_| ConfigError::Syntax {
         path: affichage.clone(),
     })?;
 
-    let mut reglages = Config::default();
+    let mut settings = Config::default();
 
-    let invalide = |cle: &str| ConfigError::InvalidKey {
+    let invalide = |key: &str| ConfigError::InvalidKey {
         path: affichage.clone(),
-        key: cle.to_string(),
+        key: key.to_string(),
     };
 
-    if let Some(valeur) = table.get("filters") {
-        let liste = valeur.as_array().ok_or_else(|| invalide("filters"))?;
-        let mut filtres = Vec::with_capacity(liste.len());
-        for element in liste {
-            let texte = element.as_str().ok_or_else(|| invalide("filters"))?;
-            filtres.push(texte.to_string());
+    if let Some(value) = document.get("filters") {
+        let list = value.as_array().ok_or_else(|| invalide("filters"))?;
+        let mut filters = Vec::with_capacity(list.len());
+        for element in list {
+            let text = element.as_str().ok_or_else(|| invalide("filters"))?;
+            filters.push(text.to_string());
         }
         // Une liste de chaînes blanches ne vaut pas mieux qu'une liste vide :
         // les fragments vides sont écartés de la requête, qui ramènerait
         // alors tout GitHub.
-        if filtres.iter().all(|filtre| filtre.trim().is_empty()) {
+        if filters.iter().all(|filter| filter.trim().is_empty()) {
             return Err(ConfigError::EmptyFilters);
         }
-        reglages.filters = filtres;
+        settings.filters = filters;
     }
 
-    if let Some(valeur) = table.get("refresh_interval") {
-        let secondes = valeur
+    if let Some(value) = document.get("refresh_interval") {
+        let seconds = value
             .as_integer()
             .ok_or_else(|| invalide("refresh_interval"))?;
-        reglages.refresh_interval =
-            u64::try_from(secondes).map_err(|_| invalide("refresh_interval"))?;
+        settings.refresh_interval =
+            u64::try_from(seconds).map_err(|_| invalide("refresh_interval"))?;
     }
 
-    if let Some(valeur) = table.get("preferred_merge_method") {
-        let texte = valeur
+    if let Some(value) = document.get("preferred_merge_method") {
+        let text = value
             .as_str()
             .ok_or_else(|| invalide("preferred_merge_method"))?;
-        reglages.preferred_merge_method = match texte {
+        settings.preferred_merge_method = match text {
             "squash" => MergeMethod::Squash,
             "rebase" => MergeMethod::Rebase,
             "merge" => MergeMethod::Merge,
@@ -133,15 +133,15 @@ pub fn load_from(path: &Path) -> Result<Config, ConfigError> {
         };
     }
 
-    if let Some(valeur) = table.get("page_size") {
-        let nombre = valeur.as_integer().ok_or_else(|| invalide("page_size"))?;
-        if !(1..=100).contains(&nombre) {
+    if let Some(value) = document.get("page_size") {
+        let count = value.as_integer().ok_or_else(|| invalide("page_size"))?;
+        if !(1..=100).contains(&count) {
             return Err(invalide("page_size"));
         }
-        reglages.page_size = nombre as u16;
+        settings.page_size = count as u16;
     }
 
-    Ok(reglages)
+    Ok(settings)
 }
 
 #[cfg(test)]
@@ -151,36 +151,36 @@ mod tests {
     use tempfile::NamedTempFile;
 
     /// Écrit un fichier de réglages temporaire et le lit.
-    fn lire(contenu: &str) -> Result<Config, ConfigError> {
-        let mut fichier = NamedTempFile::new().unwrap();
-        fichier.write_all(contenu.as_bytes()).unwrap();
-        fichier.flush().unwrap();
-        load_from(fichier.path())
+    fn read(content: &str) -> Result<Config, ConfigError> {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+        file.flush().unwrap();
+        load_from(file.path())
     }
 
     #[test]
-    fn fichier_absent_donne_les_valeurs_par_defaut() {
-        let reglages = load_from(Path::new("/introuvable/owl/config.toml")).unwrap();
-        assert_eq!(reglages, Config::default());
+    fn a_missing_file_gives_the_defaults() {
+        let settings = load_from(Path::new("/introuvable/owl/config.toml")).unwrap();
+        assert_eq!(settings, Config::default());
     }
 
     #[test]
-    fn valeurs_par_defaut_conformes_a_la_spec() {
-        let reglages = Config::default();
-        assert_eq!(reglages.filters, vec!["author:@me", "is:open"]);
-        assert_eq!(reglages.refresh_interval, 60);
-        assert_eq!(reglages.preferred_merge_method, MergeMethod::Squash);
-        assert_eq!(reglages.page_size, 50);
+    fn the_defaults_match_the_spec() {
+        let settings = Config::default();
+        assert_eq!(settings.filters, vec!["author:@me", "is:open"]);
+        assert_eq!(settings.refresh_interval, 60);
+        assert_eq!(settings.preferred_merge_method, MergeMethod::Squash);
+        assert_eq!(settings.page_size, 50);
     }
 
     #[test]
-    fn fichier_vide_donne_les_valeurs_par_defaut() {
-        assert_eq!(lire("").unwrap(), Config::default());
+    fn an_empty_file_gives_the_defaults() {
+        assert_eq!(read("").unwrap(), Config::default());
     }
 
     #[test]
-    fn fichier_complet_lu_entierement() {
-        let reglages = lire(
+    fn a_complete_file_is_read_in_full() {
+        let settings = read(
             r#"
 filters = ["review-requested:@me"]
 refresh_interval = 0
@@ -189,103 +189,103 @@ page_size = 100
 "#,
         )
         .unwrap();
-        assert_eq!(reglages.filters, vec!["review-requested:@me"]);
-        assert_eq!(reglages.refresh_interval, 0);
-        assert_eq!(reglages.preferred_merge_method, MergeMethod::Rebase);
-        assert_eq!(reglages.page_size, 100);
+        assert_eq!(settings.filters, vec!["review-requested:@me"]);
+        assert_eq!(settings.refresh_interval, 0);
+        assert_eq!(settings.preferred_merge_method, MergeMethod::Rebase);
+        assert_eq!(settings.page_size, 100);
     }
 
     #[test]
-    fn cle_inconnue_ignoree_sans_erreur() {
-        let reglages = lire("couleur_preferee = \"bleu\"\nrefresh_interval = 30\n").unwrap();
-        assert_eq!(reglages.refresh_interval, 30);
+    fn an_unknown_key_is_ignored_without_error() {
+        let settings = read("couleur_preferee = \"bleu\"\nrefresh_interval = 30\n").unwrap();
+        assert_eq!(settings.refresh_interval, 30);
     }
 
     #[test]
-    fn les_trois_methodes_de_fusion_sont_acceptees() {
-        for (texte, attendu) in [
+    fn the_three_merge_methods_are_accepted() {
+        for (text, expected) in [
             ("squash", MergeMethod::Squash),
             ("rebase", MergeMethod::Rebase),
             ("merge", MergeMethod::Merge),
         ] {
-            let reglages = lire(&format!("preferred_merge_method = \"{texte}\"\n")).unwrap();
-            assert_eq!(reglages.preferred_merge_method, attendu);
+            let settings = read(&format!("preferred_merge_method = \"{text}\"\n")).unwrap();
+            assert_eq!(settings.preferred_merge_method, expected);
         }
     }
 
     #[test]
-    fn methode_de_fusion_inconnue_refusee_avec_sa_cle() {
-        let erreur = lire("preferred_merge_method = \"fast-forward\"\n").unwrap_err();
-        let message = erreur.to_string();
+    fn an_unknown_merge_method_is_refused_with_its_key() {
+        let error = read("preferred_merge_method = \"fast-forward\"\n").unwrap_err();
+        let message = error.to_string();
         assert!(message.starts_with("Réglages invalides dans "), "{message}");
         assert!(message.ends_with(" : preferred_merge_method."), "{message}");
     }
 
     #[test]
-    fn page_size_hors_bornes_refusee_avec_sa_cle() {
-        for valeur in ["0", "101", "-5"] {
-            let erreur = lire(&format!("page_size = {valeur}\n")).unwrap_err();
+    fn an_out_of_range_page_size_is_refused_with_its_key() {
+        for value in ["0", "101", "-5"] {
+            let error = read(&format!("page_size = {value}\n")).unwrap_err();
             assert!(
-                erreur.to_string().ends_with(" : page_size."),
-                "valeur {valeur} → {erreur}"
+                error.to_string().ends_with(" : page_size."),
+                "valeur {value} → {error}"
             );
         }
     }
 
     #[test]
-    fn mauvais_type_refuse_avec_sa_cle() {
-        let erreur = lire("page_size = \"beaucoup\"\n").unwrap_err();
-        assert!(erreur.to_string().ends_with(" : page_size."), "{erreur}");
+    fn a_wrong_type_is_refused_with_its_key() {
+        let error = read("page_size = \"beaucoup\"\n").unwrap_err();
+        assert!(error.to_string().ends_with(" : page_size."), "{error}");
 
-        let erreur = lire("filters = \"author:@me\"\n").unwrap_err();
-        assert!(erreur.to_string().ends_with(" : filters."), "{erreur}");
+        let error = read("filters = \"author:@me\"\n").unwrap_err();
+        assert!(error.to_string().ends_with(" : filters."), "{error}");
 
-        let erreur = lire("refresh_interval = -1\n").unwrap_err();
+        let error = read("refresh_interval = -1\n").unwrap_err();
         assert!(
-            erreur.to_string().ends_with(" : refresh_interval."),
-            "{erreur}"
+            error.to_string().ends_with(" : refresh_interval."),
+            "{error}"
         );
     }
 
     #[test]
-    fn liste_de_filtres_vide_refusee_avec_son_propre_message() {
-        let erreur = lire("filters = []\n").unwrap_err();
+    fn an_empty_filter_list_is_refused_with_its_own_message() {
+        let error = read("filters = []\n").unwrap_err();
         assert_eq!(
-            erreur.to_string(),
+            error.to_string(),
             "Aucun filtre actif : la recherche ramènerait tout GitHub."
         );
     }
 
     #[test]
-    fn liste_de_filtres_toute_blanche_refusee_comme_une_liste_vide() {
-        let erreur = lire("filters = [\"\", \"   \"]\n").unwrap_err();
+    fn an_all_blank_filter_list_is_refused_like_an_empty_one() {
+        let error = read("filters = [\"\", \"   \"]\n").unwrap_err();
         assert_eq!(
-            erreur.to_string(),
+            error.to_string(),
             "Aucun filtre actif : la recherche ramènerait tout GitHub."
         );
     }
 
     #[test]
-    fn syntaxe_toml_invalide_refusee_avec_le_chemin() {
-        let erreur = lire("filters = [\n").unwrap_err();
-        let message = erreur.to_string();
+    fn invalid_toml_syntax_is_refused_with_the_path() {
+        let error = read("filters = [\n").unwrap_err();
+        let message = error.to_string();
         assert!(message.starts_with("Réglages invalides dans "), "{message}");
         assert!(message.ends_with(" : syntaxe TOML invalide."), "{message}");
     }
 
     #[test]
-    fn le_chemin_par_defaut_est_dans_config_owl() {
-        let chemin = default_path().unwrap();
+    fn the_default_path_is_under_config_owl() {
+        let path = default_path().unwrap();
         assert!(
-            chemin.ends_with("owl/config.toml"),
+            path.ends_with("owl/config.toml"),
             "chemin = {}",
-            chemin.display()
+            path.display()
         );
     }
 
     #[test]
     #[cfg(unix)]
-    fn fichier_illisible_refuse_avec_son_chemin() {
+    fn an_unreadable_file_is_refused_with_its_path() {
         use std::os::unix::fs::PermissionsExt;
 
         if unsafe { libc_geteuid() } == 0 {
@@ -294,12 +294,12 @@ page_size = 100
             return;
         }
 
-        let fichier = NamedTempFile::new().unwrap();
-        std::fs::set_permissions(fichier.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let file = NamedTempFile::new().unwrap();
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
 
-        let erreur = load_from(fichier.path()).unwrap_err();
-        let message = erreur.to_string();
-        std::fs::set_permissions(fichier.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        let error = load_from(file.path()).unwrap_err();
+        let message = error.to_string();
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
 
         assert!(message.starts_with("Réglages invalides dans "), "{message}");
         assert!(message.ends_with(" : fichier illisible."), "{message}");
@@ -314,7 +314,7 @@ page_size = 100
     }
 
     #[test]
-    fn le_dossier_personnel_introuvable_a_son_message() {
+    fn a_missing_home_directory_has_its_own_message() {
         assert_eq!(
             ConfigError::NoHomeDirectory.to_string(),
             "Impossible de déterminer le dossier de configuration."

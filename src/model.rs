@@ -1,6 +1,6 @@
 //! Types métier. Ne dépend ni du réseau ni du terminal.
 //!
-//! Ces types sont ceux de `docs/specs/01-modele-et-donnees.md`. Ils ne
+//! Ces types sont ceux de `docs/specs/01-modele-et-data.md`. Ils ne
 //! connaissent pas le vocabulaire de GitHub : la traduction est faite par
 //! `github::dto`, seul endroit qui voit passer un `SUCCESS` ou un
 //! `nameWithOwner`.
@@ -8,7 +8,7 @@
 use chrono::{DateTime, Utc};
 
 /// Auteur affiché quand GitHub n'en renvoie aucun : le compte a été supprimé.
-pub const AUTEUR_INCONNU: &str = "inconnu";
+pub const UNKNOWN_AUTHOR: &str = "inconnu";
 
 /// Identité d'une pull request, stable et utilisable comme clé.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -83,17 +83,17 @@ impl RepoMergeRules {
     /// fenêtre de confirmation, et celui du repli quand la méthode préférée
     /// n'est pas autorisée.
     pub fn allowed(&self) -> Vec<MergeMethod> {
-        let mut methodes = Vec::new();
+        let mut methods = Vec::new();
         if self.squash {
-            methodes.push(MergeMethod::Squash);
+            methods.push(MergeMethod::Squash);
         }
         if self.rebase {
-            methodes.push(MergeMethod::Rebase);
+            methods.push(MergeMethod::Rebase);
         }
         if self.merge {
-            methodes.push(MergeMethod::Merge);
+            methods.push(MergeMethod::Merge);
         }
-        methodes
+        methods
     }
 }
 
@@ -183,27 +183,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn une_cle_separe_le_proprietaire_et_le_depot() {
-        let cle = PrKey {
+    fn a_key_splits_the_owner_and_the_repo() {
+        let key = PrKey {
             repo: "moi/owl".to_string(),
             number: 42,
         };
-        assert_eq!(cle.owner(), "moi");
-        assert_eq!(cle.name(), "owl");
+        assert_eq!(key.owner(), "moi");
+        assert_eq!(key.name(), "owl");
     }
 
     #[test]
-    fn une_cle_sans_barre_oblique_ne_panique_pas() {
-        let cle = PrKey {
+    fn a_key_without_a_slash_does_not_panic() {
+        let key = PrKey {
             repo: "owl".to_string(),
             number: 1,
         };
-        assert_eq!(cle.owner(), "owl");
-        assert_eq!(cle.name(), "");
+        assert_eq!(key.owner(), "owl");
+        assert_eq!(key.name(), "");
     }
 
     /// Règles où tout est refusé, base des cas ci-dessous.
-    fn rien_autorise() -> RepoMergeRules {
+    fn none_allowed() -> RepoMergeRules {
         RepoMergeRules {
             squash: false,
             merge: false,
@@ -213,29 +213,29 @@ mod tests {
     }
 
     #[test]
-    fn un_depot_sans_methode_n_en_autorise_aucune() {
-        assert!(rien_autorise().allowed().is_empty());
+    fn a_repo_with_no_method_allows_none() {
+        assert!(none_allowed().allowed().is_empty());
     }
 
     #[test]
-    fn un_depot_qui_n_autorise_que_l_ecrasement_ne_rend_que_l_ecrasement() {
-        let regles = RepoMergeRules {
+    fn a_repo_allowing_only_squash_returns_only_squash() {
+        let rules = RepoMergeRules {
             squash: true,
-            ..rien_autorise()
+            ..none_allowed()
         };
-        assert_eq!(regles.allowed(), vec![MergeMethod::Squash]);
+        assert_eq!(rules.allowed(), vec![MergeMethod::Squash]);
     }
 
     #[test]
-    fn les_methodes_sont_rendues_dans_l_ordre_ecrasement_rebasage_fusion() {
-        let regles = RepoMergeRules {
+    fn the_methods_come_in_the_order_squash_rebase_merge() {
+        let rules = RepoMergeRules {
             squash: true,
             merge: true,
             rebase: true,
             delete_branch_on_merge: true,
         };
         assert_eq!(
-            regles.allowed(),
+            rules.allowed(),
             vec![MergeMethod::Squash, MergeMethod::Rebase, MergeMethod::Merge]
         );
     }
