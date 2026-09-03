@@ -20,11 +20,11 @@ dans la barre d'état, et le prochain rafraîchissement retente.
 | `gh` absent du `PATH` et aucune variable de jeton | « owl a besoin de gh. Installe-le, puis lance `gh auth login`. » |
 | `gh` présent mais non connecté | « Non connecté à GitHub. Lance `gh auth login`. » |
 | Jeton refusé (HTTP 401) | « Jeton refusé par GitHub. Lance `gh auth login` pour le renouveler. » |
-| Droits insuffisants (HTTP 403 sans limite d'appels) | « Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`. » |
+| Droits insuffisants (HTTP 403 qui n'est pas une limite d'appels) | « Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`. » |
 | Valeur de réglage invalide | « Réglages invalides dans <chemin> : <clé fautive>. » |
 | Fichier de réglages mal formé | « Réglages invalides dans <chemin> : syntaxe TOML invalide. » |
 | Fichier de réglages présent mais illisible | « Réglages invalides dans <chemin> : fichier illisible. » |
-| Liste de filtres vide | « Aucun filtre actif : la recherche ramènerait tout GitHub. » |
+| Liste de filtres vide, ou dont tous les éléments sont blancs | « Aucun filtre actif : la recherche ramènerait tout GitHub. » |
 | Dossier personnel introuvable | « Impossible de déterminer le dossier de configuration. » |
 
 Les trois cas de réglages sont distincts parce qu'ils n'apprennent pas la même
@@ -60,6 +60,14 @@ Quand GitHub refuse un solde de limite primaire épuisé sans que l'en-tête
 d'heure de réinitialisation soit exploitable, `owl` attend une minute avant de
 reprendre. L'attente est arbitraire, mais l'interdiction de réessayer en
 boucle, elle, ne l'est pas.
+
+Une limite secondaire — le garde-fou de GitHub contre les rafales, indépendant du
+compteur principal — n'empêche jamais le démarrage : elle est temporaire, et la
+confondre avec un manque de droits ferait s'arrêter `owl` sur un diagnostic faux.
+Elle se reconnaît à son en-tête de délai de reprise, au code 429, ou, faute des
+deux, à la phrase que GitHub écrit dans le corps de la réponse. Elle se traite
+comme la limite primaire : rafraîchissement suspendu, jamais de réessai en boucle,
+et une minute d'attente quand aucune heure de reprise n'est donnée.
 
 Aux réglages par défaut — une requête de liste par minute — la consommation reste
 très en dessous des quotas de GitHub. La suspension est un garde-fou, pas un cas
@@ -105,7 +113,8 @@ vraiment, y compris ses formes surprenantes.
 ### `github` — client HTTP
 
 Testé contre un serveur local qui rejoue des réponses : succès, tableau `errors`,
-401, 403 avec limite d'appels, corps tronqué. On vérifie que chaque cas donne la
+401, 403 de droits insuffisants, 403 et 429 de limite d'appels sous leurs
+trois formes, corps tronqué. On vérifie que chaque cas donne la
 bonne variante d'erreur.
 
 ### `ui` — pas de test automatique

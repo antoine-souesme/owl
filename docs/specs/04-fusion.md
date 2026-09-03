@@ -126,6 +126,12 @@ hormis un temps d'attente un peu plus long. Le détail ainsi récupéré n'entre
 dans le cache de `app` : le rafraîchissement qui suit une fusion réussie le
 rendrait aussitôt périmé.
 
+Si la pull request visée a disparu de la liste et du cache entre l'ouverture de
+la fenêtre et la confirmation — une réponse de liste déjà en vol au moment de
+l'ouverture suffit —, il n'y a plus rien à fusionner : la fenêtre se ferme et la
+notice affiche « Pull request introuvable. ». Rester silencieux donnerait
+l'impression que `Entrée` ne fait rien.
+
 Aucun compteur de génération ne protège cet appel : une seule fusion peut être en
 vol, la fenêtre bloquant le clavier pendant l'attente. Un `MergeFinished` dont la
 clé ne correspond pas à la fenêtre ouverte est simplement ignoré.
@@ -168,3 +174,5 @@ fusion, une confirmation.
 - Une fusion réussie déclenche un rafraîchissement de la liste.
 - Une fusion échouée laisse la fenêtre ouverte avec le message de GitHub, et la PR
   reste dans la liste.
+- Confirmer sur une PR disparue entre-temps ferme la fenêtre, n'émet aucun appel et
+  affiche « Pull request introuvable. ».

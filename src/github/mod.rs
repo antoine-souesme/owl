@@ -143,6 +143,13 @@ impl Client {
             // droits : leur seule présence ne dit rien.
             return Err(match limite {
                 Some(reset_at) => GithubError::RateLimited { reset_at },
+                // Sans en-tête, seul le corps distingue la limite secondaire
+                // du refus de droits ; un 429, lui, ne sert qu'aux limites.
+                None if statut == StatusCode::TOO_MANY_REQUESTS
+                    || limite_secondaire_annoncee(&corps) =>
+                {
+                    GithubError::RateLimited { reset_at: None }
+                }
                 None => GithubError::Forbidden,
             });
         }
@@ -253,6 +260,17 @@ fn limite_d_appels(entetes: &HeaderMap) -> Option<Option<DateTime<Utc>>> {
         return Some(Some(Utc::now() + chrono::Duration::seconds(delai)));
     }
     None
+}
+
+/// Vrai quand le corps de la réponse annonce une limite secondaire. GitHub y
+/// écrit une phrase reconnaissable, seul indice quand les en-têtes de reprise
+/// manquent. Classer ce refus en manque de droits ferait échouer le démarrage
+/// sur un faux diagnostic.
+fn limite_secondaire_annoncee(corps: &str) -> bool {
+    let minuscules = corps.to_lowercase();
+    ["secondary rate limit", "abuse detection mechanism"]
+        .iter()
+        .any(|marqueur| minuscules.contains(marqueur))
 }
 
 /// Vrai quand le solde de la limite primaire est explicitement à zéro.
@@ -439,6 +457,39 @@ mod tests {
             erreur.to_string(),
             "Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`."
         );
+    }
+
+    #[tokio::test]
+    async fn une_reponse_403_de_limite_secondaire_sans_en_tete_est_une_limite_d_appels() {
+        // Sans `retry-after` ni solde à zéro, seul le corps dit que le refus
+        // est temporaire. Le classer en manque de droits ferait échouer le
+        // démarrage sur un faux diagnostic.
+        let erreur = appel(
+            "403 Forbidden",
+            &[],
+            r#"{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}"#,
+        )
+        .await
+        .expect_err("erreur attendue");
+        match erreur {
+            GithubError::RateLimited { reset_at } => assert!(reset_at.is_none()),
+            autre => panic!("erreur inattendue : {autre:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn une_reponse_429_sans_en_tete_est_une_limite_d_appels() {
+        let erreur = appel(
+            "429 Too Many Requests",
+            &[],
+            r#"{"message":"Too many requests"}"#,
+        )
+        .await
+        .expect_err("erreur attendue");
+        match erreur {
+            GithubError::RateLimited { reset_at } => assert!(reset_at.is_none()),
+            autre => panic!("erreur inattendue : {autre:?}"),
+        }
     }
 
     #[tokio::test]
