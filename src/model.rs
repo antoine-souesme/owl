@@ -78,20 +78,19 @@ pub enum MergeMethod {
 }
 
 impl RepoMergeRules {
-    /// Méthodes autorisées par le dépôt, dans l'ordre imposé par la spec :
-    /// écrasement, rebasage, commit de fusion. C'est aussi l'ordre de la
-    /// fenêtre de confirmation, et celui du repli quand la méthode préférée
-    /// n'est pas autorisée.
+    /// Méthodes autorisées par le dépôt. L'ordre d'affichage n'est pas décidé
+    /// ici mais par `app::MERGE_METHODS` : cette liste ne sert qu'à savoir
+    /// lesquelles sont permises, et si le dépôt en permet au moins une.
     pub fn allowed(&self) -> Vec<MergeMethod> {
         let mut methods = Vec::new();
+        if self.merge {
+            methods.push(MergeMethod::Merge);
+        }
         if self.squash {
             methods.push(MergeMethod::Squash);
         }
         if self.rebase {
             methods.push(MergeMethod::Rebase);
-        }
-        if self.merge {
-            methods.push(MergeMethod::Merge);
         }
         methods
     }
@@ -229,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn the_methods_come_in_the_order_squash_rebase_merge() {
+    fn the_methods_come_in_the_order_merge_squash_rebase() {
         let rules = RepoMergeRules {
             squash: true,
             merge: true,
@@ -238,7 +237,7 @@ mod tests {
         };
         assert_eq!(
             rules.allowed(),
-            vec![MergeMethod::Squash, MergeMethod::Rebase, MergeMethod::Merge]
+            vec![MergeMethod::Merge, MergeMethod::Squash, MergeMethod::Rebase]
         );
     }
 }

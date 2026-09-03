@@ -604,11 +604,41 @@ fn mergeable_label(state: MergeableState) -> &'static str {
 }
 
 /// La fenêtre de fusion, prête à dessiner : un titre de cadre et des lignes
-/// déjà écrites, chevron de sélection compris. `ui` ne compose rien.
+/// déjà écrites, chevron de sélection et tons compris. `ui` ne compose rien.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MergeRender {
     pub title: String,
-    pub lines: Vec<String>,
+    pub lines: Vec<MergeLine>,
+}
+
+/// Une ligne de la fenêtre : des morceaux teintés, comme une ligne de liste.
+/// `ui` les met bout à bout. Une ligne vide n'a aucun morceau.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeLine {
+    pub cells: Vec<Cell>,
+}
+
+impl MergeLine {
+    fn empty() -> Self {
+        Self { cells: Vec::new() }
+    }
+
+    fn plain(text: impl Into<String>) -> Self {
+        Self {
+            cells: vec![Cell::plain(text)],
+        }
+    }
+
+    fn toned(text: impl Into<String>, tone: Tone) -> Self {
+        Self {
+            cells: vec![Cell::toned(text, tone)],
+        }
+    }
+
+    /// Ligne entière, morceaux mis bout à bout. Sert au repli et aux tests.
+    pub fn text(&self) -> String {
+        self.cells.iter().map(|cell| cell.text.as_str()).collect()
+    }
 }
 
 const MERGE_TITLE: &str = " Merge ";
@@ -658,47 +688,59 @@ impl App {
             .saturating_sub(OUTSIDE_CONTENT)
             .clamp(1, MAX_CONTENT_WIDTH);
 
+        // Les tons de l'en-tête sont ceux de la liste : dépôt en cyan,
+        // séparateur et numéro en gris, titre en couleur par défaut.
         let mut lines = vec![
-            format!("{}{SEPARATOR}#{}", dialog.key.repo, dialog.key.number),
-            dialog.title.clone(),
-            String::new(),
+            MergeLine {
+                cells: vec![
+                    Cell::toned(dialog.key.repo.clone(), Tone::Cyan),
+                    Cell::toned(SEPARATOR, Tone::Gray),
+                    Cell::toned(format!("#{}", dialog.key.number), Tone::Gray),
+                ],
+            },
+            MergeLine::plain(dialog.title.clone()),
+            MergeLine::empty(),
         ];
 
         match &dialog.state {
             MergeDialogState::Choosing => {
-                // Une seule méthode autorisée : rien à choisir, on le dit.
-                if let [only_one] = dialog.methods.as_slice() {
-                    lines.push(format!(
-                        "Method: {} (enforced by the repository)",
-                        short_method_label(*only_one)
-                    ));
-                } else {
-                    lines.push("Method:".to_string());
-                    for (index, method) in dialog.methods.iter().enumerate() {
-                        let caret = if index == dialog.selected { ">" } else { " " };
-                        lines.push(format!("  {caret} {}", label(*method)));
-                    }
+                lines.push(MergeLine::plain("Method:"));
+                for (index, choice) in dialog.methods.iter().enumerate() {
+                    let caret = if index == dialog.selected { ">" } else { " " };
+                    let text = format!("  {caret} {}", label(choice.method));
+                    // Comme dans la liste, la ligne sélectionnée n'est pas
+                    // surlignée : le chevron suffit. Une méthode refusée par
+                    // le dépôt reste lisible, du gris des colonnes
+                    // secondaires de la liste.
+                    lines.push(if choice.allowed {
+                        MergeLine::plain(text)
+                    } else {
+                        MergeLine::toned(text, Tone::Gray)
+                    });
                 }
-                lines.push(String::new());
-                lines.push(HELP_CHOOSING.to_string());
+                lines.push(MergeLine::empty());
+                lines.push(MergeLine::plain(HELP_CHOOSING));
             }
             MergeDialogState::Submitting => {
                 if let Some(method) = dialog.method() {
-                    lines.push(format!("Method: {}", short_method_label(method)));
+                    lines.push(MergeLine::plain(format!(
+                        "Method: {}",
+                        short_method_label(method)
+                    )));
                 }
-                lines.push(String::new());
-                lines.push(MERGING.to_string());
+                lines.push(MergeLine::empty());
+                lines.push(MergeLine::plain(MERGING));
             }
             MergeDialogState::Failed(message) => {
-                lines.push(message.clone());
-                lines.push(String::new());
-                lines.push(HELP_FAILED.to_string());
+                lines.push(MergeLine::toned(message.clone(), Tone::Red));
+                lines.push(MergeLine::empty());
+                lines.push(MergeLine::plain(HELP_FAILED));
             }
         }
 
         let lines = lines
             .iter()
-            .flat_map(|line| wrap(line, content_width))
+            .flat_map(|line| wrap_line(line, content_width))
             .collect();
 
         Some(MergeRender {
@@ -706,6 +748,45 @@ impl App {
             lines,
         })
     }
+}
+
+/// Replie une ligne teintée. Le texte entier est replié comme un texte simple,
+/// puis les tons d'origine sont reposés caractère par caractère : `wrap` ne
+/// fait que retirer des espaces aux coupures, sans jamais réordonner ni
+/// ajouter, donc suivre les deux suites en parallèle suffit à les retrouver.
+fn wrap_line(line: &MergeLine, width: usize) -> Vec<MergeLine> {
+    let toned: Vec<(char, Option<Tone>)> = line
+        .cells
+        .iter()
+        .flat_map(|cell| cell.text.chars().map(|character| (character, cell.tone)))
+        .collect();
+
+    let mut next = 0;
+    wrap(&line.text(), width)
+        .into_iter()
+        .map(|text| {
+            let mut cells: Vec<Cell> = Vec::new();
+            for character in text.chars() {
+                // Les espaces mangés par la coupure sont sautés ici.
+                while toned
+                    .get(next)
+                    .is_some_and(|(candidate, _)| *candidate != character)
+                {
+                    next += 1;
+                }
+                let tone = toned.get(next).and_then(|(_, tone)| *tone);
+                next += 1;
+                match cells.last_mut() {
+                    Some(last) if last.tone == tone => last.text.push(character),
+                    _ => cells.push(Cell {
+                        text: character.to_string(),
+                        tone,
+                    }),
+                }
+            }
+            MergeLine { cells }
+        })
+        .collect()
 }
 
 /// Replie un texte contre une largeur donnée, en coupant sur les limites de
@@ -1077,7 +1158,7 @@ mod tests {
 
         let mut affiche = vec![LIST_TITLE.to_string(), DETAIL_TITLE.to_string()];
         affiche.extend(rows(&app, LARGE).iter().map(ListRow::text));
-        affiche.extend(app.merge_render(LARGE).expect("fenêtre ouverte").lines);
+        affiche.extend(merge_texts(&app));
         affiche.push(app.status_line(LARGE));
         affiche.extend(texts(&app_in_detail(1)));
 
@@ -1247,46 +1328,91 @@ mod tests {
         assert!(app.merge_render(LARGE).is_none());
     }
 
-    #[test]
-    fn the_dialog_shows_the_repo_the_title_and_the_allowed_methods() {
-        let mut app = app_with(vec![pr_with_rules(142, all_allowed())]);
+    /// Textes des lignes de la fenêtre ouverte.
+    fn merge_texts(app: &crate::app::App) -> Vec<String> {
+        app.merge_render(LARGE)
+            .expect("la fenêtre doit être ouverte")
+            .lines
+            .iter()
+            .map(MergeLine::text)
+            .collect()
+    }
+
+    /// Fenêtre ouverte sur une PR dont on choisit les règles du dépôt.
+    fn app_with_dialog(rules: RepoMergeRules) -> crate::app::App {
+        let mut app = app_with(vec![pr_with_rules(142, rules)]);
         app.handle(Event::Key(Key::Char('m')));
+        app
+    }
+
+    #[test]
+    fn the_dialog_shows_the_repo_the_title_and_the_three_methods_in_order() {
+        let app = app_with_dialog(all_allowed());
+        let render = app
+            .merge_render(LARGE)
+            .expect("la fenêtre doit être ouverte");
+        let texts: Vec<String> = render.lines.iter().map(MergeLine::text).collect();
+
+        assert_eq!(render.title, " Merge ");
+        assert_eq!(texts[0], "moi/depot │ #142");
+        assert_eq!(texts[1], "Titre 142");
+        assert_eq!(
+            texts[3..7],
+            [
+                "Method:",
+                "    Create a merge commit",
+                "  > Squash and merge",
+                "    Rebase and merge",
+            ]
+        );
+        assert!(texts.contains(&"Enter to confirm · Esc to cancel".to_string()));
+    }
+
+    #[test]
+    fn the_header_carries_the_tones_of_the_list() {
+        let app = app_with_dialog(all_allowed());
         let render = app
             .merge_render(LARGE)
             .expect("la fenêtre doit être ouverte");
 
-        assert_eq!(render.title, " Merge ");
-        assert_eq!(render.lines[0], "moi/depot │ #142");
-        assert_eq!(render.lines[1], "Titre 142");
-        assert!(render.lines.contains(&"Method:".to_string()));
-        assert!(render.lines.contains(&"  > Squash and merge".to_string()));
-        assert!(render.lines.contains(&"    Rebase and merge".to_string()));
-        assert!(render
-            .lines
-            .contains(&"    Create a merge commit".to_string()));
-        assert!(render
-            .lines
-            .contains(&"Enter to confirm · Esc to cancel".to_string()));
+        // Le séparateur et le numéro portent le même gris : le repli les
+        // rend en un seul morceau, ce qui ne change rien à l'affichage.
+        assert_eq!(
+            render.lines[0].cells,
+            vec![
+                Cell::toned("moi/depot", Tone::Cyan),
+                Cell::toned(" │ #142", Tone::Gray),
+            ]
+        );
+        // Le titre garde la couleur par défaut du terminal, comme dans la liste.
+        assert_eq!(render.lines[1].cells, vec![Cell::plain("Titre 142")]);
     }
 
     #[test]
-    fn a_single_allowed_method_replaces_the_list_with_one_line() {
+    fn a_method_the_repo_refuses_stays_visible_but_greyed_out() {
         let rules = RepoMergeRules {
             squash: true,
             merge: false,
             rebase: false,
             delete_branch_on_merge: true,
         };
-        let mut app = app_with(vec![pr_with_rules(142, rules)]);
-        app.handle(Event::Key(Key::Char('m')));
+        let app = app_with_dialog(rules);
         let render = app
             .merge_render(LARGE)
             .expect("la fenêtre doit être ouverte");
 
-        assert!(render
-            .lines
-            .contains(&"Method: squash and merge (enforced by the repository)".to_string()));
-        assert!(!render.lines.iter().any(|line| line.contains('>')));
+        let tone = |needle: &str| {
+            render
+                .lines
+                .iter()
+                .find(|line| line.text().contains(needle))
+                .expect("ligne absente")
+                .cells[0]
+                .tone
+        };
+        assert_eq!(tone("Create a merge commit"), Some(Tone::Gray));
+        assert_eq!(tone("Rebase and merge"), Some(Tone::Gray));
+        assert_eq!(tone("Squash and merge"), None);
     }
 
     #[test]
@@ -1298,11 +1424,9 @@ mod tests {
             .merge_render(LARGE)
             .expect("la fenêtre doit rester ouverte");
 
-        assert!(render.lines.contains(&"Merging…".to_string()));
-        assert!(!render
-            .lines
-            .iter()
-            .any(|line| line.contains("Esc to cancel")));
+        let texts: Vec<String> = render.lines.iter().map(MergeLine::text).collect();
+        assert!(texts.contains(&"Merging…".to_string()));
+        assert!(!texts.iter().any(|line| line.contains("Esc to cancel")));
     }
 
     #[test]
@@ -1316,12 +1440,14 @@ mod tests {
             .merge_render(LARGE)
             .expect("la fenêtre doit être ouverte");
 
-        assert!(render
-            .lines
-            .contains(&"Base branch was modified.".to_string()));
-        assert!(render
-            .lines
-            .contains(&"Enter to retry · Esc to close".to_string()));
+        let texts: Vec<String> = render.lines.iter().map(MergeLine::text).collect();
+        assert!(texts.contains(&"Base branch was modified.".to_string()));
+        assert!(texts.contains(&"Enter to retry · Esc to close".to_string()));
+        // Le message de GitHub est en rouge, comme les états en échec de la liste.
+        assert_eq!(
+            render.lines[3].cells,
+            vec![Cell::toned("Base branch was modified.", Tone::Red)]
+        );
     }
 
     #[test]
@@ -1340,7 +1466,8 @@ mod tests {
 
         // Aucune ligne ne dépasse la largeur maximale de contenu de la
         // fenêtre : le message est reconstitué en le repliant.
-        for line in &render.lines {
+        let render_lines: Vec<String> = render.lines.iter().map(MergeLine::text).collect();
+        for line in &render_lines {
             assert!(
                 line.chars().count() <= 60,
                 "ligne trop longue, non repliée : {line}"
@@ -1349,17 +1476,15 @@ mod tests {
 
         // Rien n'est perdu : les morceaux du message, mis bout à bout avec
         // une espace, redonnent le message d'origine.
-        let start_index = render
-            .lines
+        let start_index = render_lines
             .iter()
             .position(|line| line.starts_with("Required"))
             .expect("le message doit apparaître");
-        let end_index = render
-            .lines
+        let end_index = render_lines
             .iter()
             .position(|line| line.ends_with("write access."))
             .expect("la fin du message doit apparaître");
-        let rebuilt = render.lines[start_index..=end_index].join(" ");
+        let rebuilt = render_lines[start_index..=end_index].join(" ");
         assert_eq!(rebuilt, message);
     }
 }
