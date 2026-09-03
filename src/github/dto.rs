@@ -41,6 +41,7 @@ pub struct SearchNode {
     pub mergeable: Option<String>,
     pub review_decision: Option<String>,
     pub base_ref_name: Option<String>,
+    pub head_ref_name: Option<String>,
     pub updated_at: Option<DateTime<Utc>>,
     pub author: Option<Actor>,
     pub repository: Option<RepositoryDto>,
@@ -133,7 +134,6 @@ pub struct RepositoryDetail {
 pub struct PullRequestDetail {
     pub id: String,
     pub body: Option<String>,
-    pub head_ref_name: String,
     pub additions: u32,
     pub deletions: u32,
     pub commits: Option<CommitConnection>,
@@ -230,6 +230,9 @@ impl SearchNode {
             // Une branche cible absente laisse la colonne vide plutôt que de
             // faire disparaître la pull request de la liste.
             base_ref: self.base_ref_name.clone().unwrap_or_default(),
+            // Même prudence pour la branche d'origine, affichée par la vue
+            // détail et par la fenêtre de fusion.
+            head_ref: self.head_ref_name.clone().unwrap_or_default(),
             updated_at,
             repo_rules: RepoMergeRules {
                 squash: repository.squash_merge_allowed,
@@ -297,7 +300,6 @@ impl PullRequestDetail {
             summary,
             node_id: self.id.clone(),
             body: self.body.clone().unwrap_or_default(),
-            head_ref: self.head_ref_name.clone(),
             checks: contexts
                 .map(|connection| {
                     connection
@@ -469,6 +471,8 @@ mod tests {
         assert_eq!(first_one.checks, ChecksState::Success);
         assert_eq!(first_one.review, ReviewState::Approved);
         assert_eq!(first_one.mergeable, MergeableState::Mergeable);
+        assert_eq!(first_one.base_ref, "develop");
+        assert_eq!(first_one.head_ref, "feat/fusion");
         assert_eq!(
             first_one.updated_at.to_rfc3339(),
             "2026-08-30T09:12:44+00:00"
@@ -482,6 +486,14 @@ mod tests {
                 delete_branch_on_merge: true,
             }
         );
+    }
+
+    #[test]
+    fn a_pr_without_any_branch_name_keeps_empty_branches() {
+        let page = page();
+        let without_branches = &page.pull_requests[4];
+        assert_eq!(without_branches.base_ref, "");
+        assert_eq!(without_branches.head_ref, "");
     }
 
     #[test]
@@ -596,7 +608,6 @@ mod tests {
             detail.body,
             "Ajoute la fenêtre de fusion et ses raccourcis."
         );
-        assert_eq!(detail.head_ref, "feat/fusion");
         assert_eq!(detail.additions, 214);
         assert_eq!(detail.deletions, 37);
         assert_eq!(detail.summary, summary());

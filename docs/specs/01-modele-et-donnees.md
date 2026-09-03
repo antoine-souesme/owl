@@ -28,6 +28,7 @@ struct PrSummary {
     review: ReviewState,
     mergeable: MergeableState,
     base_ref: String,             // branche visée par la fusion
+    head_ref: String,             // branche d'origine de la fusion
     updated_at: DateTime<Utc>,
     repo_rules: RepoMergeRules,
 }
@@ -53,7 +54,6 @@ struct PrDetail {
     summary: PrSummary,
     node_id: String,          // identifiant GraphQL, nécessaire à la fusion
     body: String,
-    head_ref: String,
     checks: Vec<CheckRun>,
     reviews: Vec<Review>,
     comments: Vec<Comment>,
@@ -68,9 +68,11 @@ struct Comment { author: String, body: String, created_at: DateTime<Utc> }
 struct ChangedFile { path: String, additions: u32, deletions: u32 }
 ```
 
-`base_ref` est porté par `PrSummary` et non par `PrDetail` : la colonne de la vue
-liste l'affiche, et elle arrive dans la même requête que la liste. La vue détail la
-lit sur le résumé qu'elle porte déjà, plutôt que de la demander deux fois.
+`base_ref` et `head_ref` sont portés par `PrSummary` et non par `PrDetail` : la
+colonne de la vue liste affiche la première, la fenêtre de fusion affiche les deux,
+et elles arrivent dans la même requête que la liste. La vue détail les lit sur le
+résumé qu'elle porte déjà, plutôt que de les demander deux fois — la fenêtre de
+fusion s'ouvre ainsi depuis la liste sans attendre la requête de détail.
 
 `RepoMergeRules` est porté par `PrSummary` et non par une structure de dépôt séparée :
 l'information arrive dans la même requête que la liste, et la fenêtre de fusion en a
@@ -131,6 +133,7 @@ query List($q: String!, $n: Int!) {
         mergeable
         reviewDecision
         baseRefName
+        headRefName
         updatedAt
         author { login }
         repository {
@@ -167,7 +170,6 @@ query Detail($owner: String!, $name: String!, $number: Int!) {
     pullRequest(number: $number) {
       id
       body
-      headRefName
       additions
       deletions
       commits(last: 1) {

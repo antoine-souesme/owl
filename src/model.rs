@@ -114,6 +114,9 @@ pub struct PrSummary {
     /// Branche visée par la fusion. Elle vient avec la liste : la colonne de
     /// la vue liste l'affiche sans attendre la requête de détail.
     pub base_ref: String,
+    /// Branche d'origine de la fusion. Elle vient aussi avec la liste : la
+    /// fenêtre de fusion l'affiche sans attendre la requête de détail.
+    pub head_ref: String,
     pub updated_at: DateTime<Utc>,
     pub repo_rules: RepoMergeRules,
 }
@@ -141,7 +144,6 @@ pub struct PrDetail {
     /// Identifiant GraphQL, nécessaire à la fusion.
     pub node_id: String,
     pub body: String,
-    pub head_ref: String,
     pub checks: Vec<CheckRun>,
     pub reviews: Vec<Review>,
     pub comments: Vec<Comment>,

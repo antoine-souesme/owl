@@ -10,6 +10,7 @@
           "mergeable": "MERGEABLE",
           "reviewDecision": "APPROVED",
           "baseRefName": "develop",
+          "headRefName": "feat/fusion",
           "updatedAt": "2026-08-30T09:12:44Z",
           "author": {
             "login": "moi"
@@ -42,6 +43,7 @@
           "mergeable": "UNKNOWN",
           "reviewDecision": null,
           "baseRefName": "main",
+          "headRefName": "brouillon",
           "updatedAt": "2026-08-29T18:03:00Z",
           "author": null,
           "repository": {
@@ -63,6 +65,7 @@
           "mergeable": "CONFLICTING",
           "reviewDecision": "CHANGES_REQUESTED",
           "baseRefName": "main",
+          "headRefName": "fix/troncature",
           "updatedAt": "2026-08-28T07:45:10Z",
           "author": {
             "login": "camille"
@@ -94,6 +97,7 @@
           "mergeable": "MERGEABLE",
           "reviewDecision": "REVIEW_REQUIRED",
           "baseRefName": "develop",
+          "headRefName": "chore/ratatui-0.30",
           "updatedAt": "2026-08-27T22:00:00Z",
           "author": {
             "login": "moi"
