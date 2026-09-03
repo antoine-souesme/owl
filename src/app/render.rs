@@ -706,10 +706,16 @@ impl App {
             MergeDialogState::Choosing => {
                 lines.push(MergeLine::plain("Method:"));
                 for (index, choice) in dialog.methods.iter().enumerate() {
-                    let caret = if index == dialog.selected { ">" } else { " " };
-                    let text = format!("  {caret} {}", label(choice.method));
+                    // Le marqueur de la liste, et à sa place autant d'espaces :
+                    // les libellés restent alignés d'une ligne à l'autre.
+                    let marker = if index == dialog.selected {
+                        SELECTION_MARKER
+                    } else {
+                        &" ".repeat(SELECTION_MARKER.chars().count())
+                    };
+                    let text = format!("  {marker}{}", label(choice.method));
                     // Comme dans la liste, la ligne sélectionnée n'est pas
-                    // surlignée : le chevron suffit. Une méthode refusée par
+                    // surlignée : le marqueur suffit. Une méthode refusée par
                     // le dépôt reste lisible, du gris des colonnes
                     // secondaires de la liste.
                     lines.push(if choice.allowed {
@@ -1361,7 +1367,7 @@ mod tests {
             [
                 "Method:",
                 "    Create a merge commit",
-                "  > Squash and merge",
+                "  → Squash and merge",
                 "    Rebase and merge",
             ]
         );

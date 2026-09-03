@@ -46,7 +46,7 @@ Une fenêtre centrée, par-dessus la liste, qui capte tout le clavier.
 │                                    │
 │ Method:                            │
 │     Create a merge commit          │
-│   > Squash and merge               │
+│   → Squash and merge               │
 │     Rebase and merge               │
 │                                    │
 │ Enter to confirm · Esc to cancel   │
@@ -69,7 +69,8 @@ La fenêtre reprend le code couleur de la vue liste : le dépôt en cyan, la bar
 verticale et le numéro en gris, le titre en couleur par défaut, les méthodes
 refusées du même gris que les colonnes secondaires de la liste, et le message
 d'erreur de GitHub en rouge. Comme dans la liste, la ligne sélectionnée n'est pas
-surlignée : le chevron suffit.
+surlignée : le marqueur suffit, et c'est le même — `SELECTION_MARKER`, défini une
+seule fois.
 
 `Entrée` confirme, `Échap` annule, les flèches haut et bas changent de méthode sans
 boucler et sans jamais s'arrêter sur une méthode que le dépôt refuse. Sur un dépôt
@@ -117,9 +118,9 @@ capitale : « create a merge commit », « squash and merge », « rebase and me
 
 `app` expose la fenêtre sous la forme d'un `MergeRender { title, lines }`, où chaque
 ligne est une suite de morceaux teintés comme une ligne de liste : un titre de cadre
-et des lignes déjà écrites, chevron de sélection et couleurs comprises. Toute la
-composition — le chevron, les libellés, les tons, le message d'attente — est décidée
-dans `app/render.rs`. `merge_render` reçoit la
+et des lignes déjà écrites, marqueur de sélection et couleurs comprises. Toute la
+composition — le marqueur, les libellés, les tons, le message d'attente — est
+décidée dans `app/render.rs`. `merge_render` reçoit la
 largeur disponible, exactement comme `status_line(width)`, et replie lui-même
 chaque ligne contre une largeur de contenu bornée — sur les limites de mots quand
 c'est possible, sans jamais perdre de contenu — pour qu'un message de GitHub trop
