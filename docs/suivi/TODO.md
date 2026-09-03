@@ -7,3 +7,4 @@
 - Séparer un peu plus visuellement les données sur la vue détails, demande moi si tu n'es pas sur de quoi faire
 - Ajouter une colonne correspondant à la date relative ultra simple (d = jour, h = heure, m = min) (exemple : 3d / 34m / 7h)
 - Ajouter une colonne correspondant à la target de la pr
+- Après une fusion, il faut refresh la liste
