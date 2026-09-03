@@ -112,6 +112,9 @@ pub struct PrSummary {
     pub checks: ChecksState,
     pub review: ReviewState,
     pub mergeable: MergeableState,
+    /// Branche visée par la fusion. Elle vient avec la liste : la colonne de
+    /// la vue liste l'affiche sans attendre la requête de détail.
+    pub base_ref: String,
     pub updated_at: DateTime<Utc>,
     pub repo_rules: RepoMergeRules,
 }
@@ -140,7 +143,6 @@ pub struct PrDetail {
     pub node_id: String,
     pub body: String,
     pub head_ref: String,
-    pub base_ref: String,
     pub checks: Vec<CheckRun>,
     pub reviews: Vec<Review>,
     pub comments: Vec<Comment>,

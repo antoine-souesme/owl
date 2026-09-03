@@ -94,7 +94,22 @@ rend la navigation testable sans terminal ni réseau.
 lignes prêtes à dessiner, soit le message de liste vide avec le rappel des filtres,
 soit le message de terminal trop étroit — et le détail sous la forme d'un
 `Vec<DetailLine>`. Chaque élément porte un `Tone` que `ui` traduit en couleur, et
-c'est la seule traduction que `ui` fait.
+c'est la seule traduction que `ui` fait. Les titres des deux cadres sont eux aussi
+des constantes de `app` : un titre est un message.
+
+Une ligne de liste est une suite de morceaux, pas une chaîne unique :
+
+```rust
+struct ListRow { checks: Glyph, review: Glyph, cells: Vec<Cell>, dim: bool }
+
+struct Cell { text: String, tone: Option<Tone> }   // ton absent : couleur par défaut
+
+enum Tone { Green, Red, Yellow, Gray, Cyan, Blue }
+```
+
+Le découpage en morceaux est ce qui permet de colorer chaque colonne sans que `ui`
+ait à retrouver où elle commence : le remplissage est déjà posé, `ui` met les
+morceaux bout à bout.
 
 Les largeurs se mesurent en caractères, pas en colonnes de terminal : mesurer les
 colonnes réellement occupées demanderait une dépendance de plus. Un titre en
@@ -119,20 +134,48 @@ La sélection ne boucle pas : en haut de liste, la flèche haut ne fait rien.
 Quand la fenêtre de fusion est ouverte, elle capte tout le clavier ; les touches
 ci-dessus sont inactives jusqu'à sa fermeture, `Ctrl+C` exceptée : elle quitte
 `owl` même fenêtre ouverte, `q` non. Pendant ce temps, l'aide clavier de la barre
-d'état devient « ↑↓ choisir · Entrée confirmer · Échap annuler ».
+d'état devient « ↑↓ choose · Enter confirm · Esc cancel ».
 
 ## Vue liste
 
+Le cadre porte le titre « Owl - Monitoring pull requests ».
+
 Une ligne par pull request, sur une seule ligne de terminal, dans cet ordre :
+pictogrammes, dépôt, numéro, âge, branche cible, titre.
 
 ```
- ✓ ✓  org/dépôt  #142  Corrige la lecture des réglages
- ✗ ●  org/autre  #7    Ajoute la commande de purge
- ○ ·  org/dépôt  #150  [brouillon] Essai de mise en cache
- ✓ ✓  org/tiers  #31   ⚠ Renomme le module de rendu
+→ ✓ ✓  org/depot │ #142   3h   develop  Fix settings loading
+  ✗ ●  org/other │ #7     34m  main     Add the purge command
+  ○ ·  org/depot │ #150   2d   develop  [draft] Try caching
+  ✓ ✓  org/third │ #31    7h   main     ⚠ Rename the render module
 ```
+
+La ligne sélectionnée est marquée par une flèche à gauche, et par rien d'autre :
+inverser ses couleurs ferait des tons de ses colonnes autant de fonds colorés, et la
+ligne cesserait de se lire comme les autres.
 
 Deux colonnes de pictogrammes, à largeur fixe, avant le texte.
+
+Une barre verticale sépare le dépôt du numéro : les deux se lisent ensemble, et une
+simple espace les confondrait.
+
+L'âge est celui de la dernière mise à jour, en une poignée de caractères : `m` pour
+les minutes en dessous d'une heure, `h` pour les heures en dessous d'un jour, `d`
+au-delà — `34m`, `7h`, `3d`. Une date dans le futur, horloges désaccordées, donne
+`0m` plutôt qu'un nombre négatif.
+
+La branche cible est celle visée par la fusion. Elle vient avec la liste, sans
+requête supplémentaire.
+
+Chaque colonne porte son ton, et c'est là toute la couleur de la ligne :
+
+| Colonne | Ton |
+|---|---|
+| Dépôt | cyan |
+| Séparateur et numéro | gris |
+| Âge | gris |
+| Branche cible | bleu |
+| Titre | couleur par défaut du terminal |
 
 Vérifications :
 
@@ -161,8 +204,12 @@ fusion.
 
 Le titre est tronqué à la largeur disponible. Le nom du dépôt n'est jamais tronqué :
 c'est lui qui permet de s'orienter. Si la fenêtre est trop étroite pour tenir le
-dépôt et le numéro, `owl` affiche à la place de la liste : « Élargis le terminal : le
-dépôt et le numéro n'y tiennent pas. »
+dépôt et le numéro, `owl` affiche à la place de la liste : « Widen the terminal: the
+repository and the number do not fit. »
+
+Entre les deux, les colonnes sont abandonnées entières plutôt que coupées, dans cet
+ordre : le titre rétrécit d'abord, puis la branche cible disparaît, puis l'âge. Une
+colonne à moitié coupée n'apprend rien ; une colonne absente se remarque.
 
 La liste défile quand elle dépasse la hauteur de la fenêtre, en suivant la sélection.
 Le défilement est une affaire de dessin : `ui` le recalcule à chaque image depuis
@@ -182,21 +229,35 @@ important au plus important. L'aide clavier part la première — c'est un rappe
 une information — puis l'heure du dernier rafraîchissement, puis le résumé de la
 liste, puis l'annonce du chargement. L'erreur en cours est ce qui reste en dernier.
 
-Une liste vide affiche « Aucune pull request » avec un rappel des filtres actifs —
-sans quoi un filtre trop restrictif ressemble à une panne.
+Une liste vide affiche « No pull requests » avec un rappel des filtres actifs — sans
+quoi un filtre trop restrictif ressemble à une panne.
 
 ## Vue détail
 
-De haut en bas : le titre avec le dépôt et le numéro ; la ligne d'auteur ; la ligne
-des branches (`de <head> vers <base>`) ; les mêmes états que la liste, en clair cette
-fois ; la description de la PR ; la liste des vérifications, une par ligne avec son
-résultat ; les relectures et les commentaires, dans l'ordre chronologique ; les
-fichiers modifiés avec leur nombre de lignes ajoutées et retirées ; enfin l'heure de
-chargement du détail.
+Le cadre porte le titre « Owl - Pull request details ».
 
-L'auteur et les branches occupent deux lignes distinctes, et non une seule : l'auteur
-vient du résumé déjà en mémoire, les branches n'arrivent qu'avec la réponse de détail.
-C'est le seul découpage qui permet d'afficher l'auteur avant la réponse.
+En haut, un en-tête encadré : dépôt et numéro, titre, puis auteur et âge. Tout y
+vient du résumé déjà en mémoire, ce qui permet de l'afficher avant la réponse de
+détail. La branche cible n'y est pas reprise : la section « Branches » la donne, avec
+celle d'où part la pull request. Le cadre ne dépasse pas soixante-douze colonnes : sur un terminal
+large, un cadre qui suit toute la largeur encombre plus qu'il ne sépare.
+
+En dessous, des sections titrées, séparées par une ligne vide, dans cet ordre :
+
+| Section | Contenu |
+|---|---|
+| `Branches` | `<head> -> <base>` |
+| `Status` | les mêmes états que la liste, en clair, pictogramme compris — vérifications, relectures, puis état de fusion |
+| `Description` | la description de la PR |
+| `Checks (n)` | les vérifications, une par ligne avec son résultat |
+| `Reviews and comments` | les relectures et les commentaires, dans l'ordre chronologique |
+| `Files changed (n) · +a -r` | les fichiers modifiés et leurs compteurs |
+
+Une dernière ligne, en gris, donne l'heure de chargement du détail.
+
+Le titre d'une section est teinté et n'est pas indenté ; son contenu l'est de trois
+espaces. C'est ce décalage, avec la ligne vide, qui fait lire les sections comme des
+blocs plutôt que comme une suite de lignes.
 
 Le tout est une seule zone qui défile, pas un ensemble de panneaux. C'est plus simple
 à écrire et plus lisible dans un terminal étroit.
@@ -206,10 +267,10 @@ La vue détail ne renvoie pas à la ligne : une ligne logique vaut une ligne d'�
 hauteur. Les lignes trop longues sont tronquées comme celles de la liste, et `o` ouvre
 la pull request dans le navigateur pour lire une description entière.
 
-Tant que la requête de détail n'a pas répondu, l'en-tête est affiché — il vient de
-`PrSummary`, déjà en mémoire — et le reste indique « chargement ». Une PR déjà
-consultée pendant la session s'affiche immédiatement depuis le cache, et sa requête
-n'est pas relancée sauf appui sur `r`.
+Tant que la requête de détail n'a pas répondu, l'en-tête encadré est affiché — il
+vient de `PrSummary`, déjà en mémoire — et le reste indique « Loading details… ». Une
+PR déjà consultée pendant la session s'affiche immédiatement depuis le cache, et sa
+requête n'est pas relancée sauf appui sur `r`.
 
 Si la pull request affichée a quitté la liste, son en-tête est repris du résumé porté
 par le détail en cache. Un cache qui devient inaffichable dès qu'un rafraîchissement
@@ -260,3 +321,11 @@ Tous vérifiables sans terminal, en envoyant des événements à `App` :
 - Un `Tick` reçu pendant un chargement de liste n'émet pas de seconde requête.
 - Un `Resize` n'émet aucune commande, ne déplace pas la sélection, ne change pas de
   vue et n'efface pas le message en cours.
+- Une ligne de liste porte le dépôt, le numéro, l'âge, la branche cible et le titre,
+  chacun avec son ton, et le dépôt est séparé du numéro par une barre verticale.
+- L'âge se lit en minutes, en heures puis en jours selon l'ancienneté, et une date
+  dans le futur donne `0m`.
+- Réduite, la liste abandonne la branche cible puis l'âge sans jamais tronquer le
+  dépôt ni le numéro.
+- La vue détail encadre son en-tête et titre ses sections.
+- Aucun texte affiché ne porte de tiret cadratin.

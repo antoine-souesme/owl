@@ -38,15 +38,15 @@ impl Default for Config {
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("Réglages invalides dans {path} : syntaxe TOML invalide.")]
+    #[error("Invalid settings in {path}: invalid TOML syntax.")]
     Syntax { path: String },
-    #[error("Réglages invalides dans {path} : fichier illisible.")]
+    #[error("Invalid settings in {path}: unreadable file.")]
     Unreadable { path: String },
-    #[error("Réglages invalides dans {path} : {key}.")]
+    #[error("Invalid settings in {path}: {key}.")]
     InvalidKey { path: String, key: String },
-    #[error("Aucun filtre actif : la recherche ramènerait tout GitHub.")]
+    #[error("No active filter: the search would return all of GitHub.")]
     EmptyFilters,
-    #[error("Impossible de déterminer le dossier de configuration.")]
+    #[error("Cannot determine the configuration directory.")]
     NoHomeDirectory,
 }
 
@@ -74,7 +74,7 @@ pub fn load() -> Result<Config, ConfigError> {
 /// (droits insuffisants, par exemple) : erreur, car c'est une vraie
 /// mauvaise configuration à signaler, pas une absence.
 pub fn load_from(path: &Path) -> Result<Config, ConfigError> {
-    let affichage = path.display().to_string();
+    let shown_path = path.display().to_string();
 
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -82,26 +82,26 @@ pub fn load_from(path: &Path) -> Result<Config, ConfigError> {
             return Ok(Config::default());
         }
         Err(_) => {
-            return Err(ConfigError::Unreadable { path: affichage });
+            return Err(ConfigError::Unreadable { path: shown_path });
         }
     };
 
     let document: toml::Table = toml::from_str(&text).map_err(|_| ConfigError::Syntax {
-        path: affichage.clone(),
+        path: shown_path.clone(),
     })?;
 
     let mut settings = Config::default();
 
-    let invalide = |key: &str| ConfigError::InvalidKey {
-        path: affichage.clone(),
+    let invalid = |key: &str| ConfigError::InvalidKey {
+        path: shown_path.clone(),
         key: key.to_string(),
     };
 
     if let Some(value) = document.get("filters") {
-        let list = value.as_array().ok_or_else(|| invalide("filters"))?;
+        let list = value.as_array().ok_or_else(|| invalid("filters"))?;
         let mut filters = Vec::with_capacity(list.len());
         for element in list {
-            let text = element.as_str().ok_or_else(|| invalide("filters"))?;
+            let text = element.as_str().ok_or_else(|| invalid("filters"))?;
             filters.push(text.to_string());
         }
         // Une liste de chaînes blanches ne vaut pas mieux qu'une liste vide :
@@ -116,27 +116,27 @@ pub fn load_from(path: &Path) -> Result<Config, ConfigError> {
     if let Some(value) = document.get("refresh_interval") {
         let seconds = value
             .as_integer()
-            .ok_or_else(|| invalide("refresh_interval"))?;
+            .ok_or_else(|| invalid("refresh_interval"))?;
         settings.refresh_interval =
-            u64::try_from(seconds).map_err(|_| invalide("refresh_interval"))?;
+            u64::try_from(seconds).map_err(|_| invalid("refresh_interval"))?;
     }
 
     if let Some(value) = document.get("preferred_merge_method") {
         let text = value
             .as_str()
-            .ok_or_else(|| invalide("preferred_merge_method"))?;
+            .ok_or_else(|| invalid("preferred_merge_method"))?;
         settings.preferred_merge_method = match text {
             "squash" => MergeMethod::Squash,
             "rebase" => MergeMethod::Rebase,
             "merge" => MergeMethod::Merge,
-            _ => return Err(invalide("preferred_merge_method")),
+            _ => return Err(invalid("preferred_merge_method")),
         };
     }
 
     if let Some(value) = document.get("page_size") {
-        let count = value.as_integer().ok_or_else(|| invalide("page_size"))?;
+        let count = value.as_integer().ok_or_else(|| invalid("page_size"))?;
         if !(1..=100).contains(&count) {
-            return Err(invalide("page_size"));
+            return Err(invalid("page_size"));
         }
         settings.page_size = count as u16;
     }
@@ -217,8 +217,8 @@ page_size = 100
     fn an_unknown_merge_method_is_refused_with_its_key() {
         let error = read("preferred_merge_method = \"fast-forward\"\n").unwrap_err();
         let message = error.to_string();
-        assert!(message.starts_with("Réglages invalides dans "), "{message}");
-        assert!(message.ends_with(" : preferred_merge_method."), "{message}");
+        assert!(message.starts_with("Invalid settings in "), "{message}");
+        assert!(message.ends_with(": preferred_merge_method."), "{message}");
     }
 
     #[test]
@@ -226,7 +226,7 @@ page_size = 100
         for value in ["0", "101", "-5"] {
             let error = read(&format!("page_size = {value}\n")).unwrap_err();
             assert!(
-                error.to_string().ends_with(" : page_size."),
+                error.to_string().ends_with(": page_size."),
                 "valeur {value} → {error}"
             );
         }
@@ -235,14 +235,14 @@ page_size = 100
     #[test]
     fn a_wrong_type_is_refused_with_its_key() {
         let error = read("page_size = \"beaucoup\"\n").unwrap_err();
-        assert!(error.to_string().ends_with(" : page_size."), "{error}");
+        assert!(error.to_string().ends_with(": page_size."), "{error}");
 
         let error = read("filters = \"author:@me\"\n").unwrap_err();
-        assert!(error.to_string().ends_with(" : filters."), "{error}");
+        assert!(error.to_string().ends_with(": filters."), "{error}");
 
         let error = read("refresh_interval = -1\n").unwrap_err();
         assert!(
-            error.to_string().ends_with(" : refresh_interval."),
+            error.to_string().ends_with(": refresh_interval."),
             "{error}"
         );
     }
@@ -252,7 +252,7 @@ page_size = 100
         let error = read("filters = []\n").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Aucun filtre actif : la recherche ramènerait tout GitHub."
+            "No active filter: the search would return all of GitHub."
         );
     }
 
@@ -261,7 +261,7 @@ page_size = 100
         let error = read("filters = [\"\", \"   \"]\n").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Aucun filtre actif : la recherche ramènerait tout GitHub."
+            "No active filter: the search would return all of GitHub."
         );
     }
 
@@ -269,8 +269,8 @@ page_size = 100
     fn invalid_toml_syntax_is_refused_with_the_path() {
         let error = read("filters = [\n").unwrap_err();
         let message = error.to_string();
-        assert!(message.starts_with("Réglages invalides dans "), "{message}");
-        assert!(message.ends_with(" : syntaxe TOML invalide."), "{message}");
+        assert!(message.starts_with("Invalid settings in "), "{message}");
+        assert!(message.ends_with(": invalid TOML syntax."), "{message}");
     }
 
     #[test]
@@ -301,8 +301,8 @@ page_size = 100
         let message = error.to_string();
         std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
 
-        assert!(message.starts_with("Réglages invalides dans "), "{message}");
-        assert!(message.ends_with(" : fichier illisible."), "{message}");
+        assert!(message.starts_with("Invalid settings in "), "{message}");
+        assert!(message.ends_with(": unreadable file."), "{message}");
     }
 
     #[cfg(unix)]
@@ -317,7 +317,7 @@ page_size = 100
     fn a_missing_home_directory_has_its_own_message() {
         assert_eq!(
             ConfigError::NoHomeDirectory.to_string(),
-            "Impossible de déterminer le dossier de configuration."
+            "Cannot determine the configuration directory."
         );
     }
 }

@@ -16,9 +16,13 @@ possibilité de fusionner sans quitter le terminal.
 On lance `owl`, sans argument. Un écran s'affiche avec la liste des pull requests
 concernées — par défaut mes PR ouvertes, tous dépôts confondus.
 
-Chaque ligne montre le dépôt, le numéro, le titre, l'état de la CI, l'état des
-relectures, et signale les brouillons et les conflits. L'affichage reste volontairement
-sobre : une ligne par PR, des pictogrammes plutôt que des phrases.
+Chaque ligne montre le dépôt, le numéro, l'âge de la dernière mise à jour, la
+branche visée, le titre, l'état de la CI et l'état des relectures ; les brouillons et
+les conflits y sont signalés. L'affichage reste volontairement sobre : une ligne par
+PR, des pictogrammes plutôt que des phrases, et une couleur par colonne pour s'y
+retrouver d'un coup d'œil.
+
+L'interface est en anglais.
 
 La flèche droite ouvre le détail d'une PR : description, auteur, branches, liste des
 vérifications, relectures et commentaires, fichiers modifiés. La flèche gauche

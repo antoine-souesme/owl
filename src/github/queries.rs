@@ -18,6 +18,7 @@ pub const LIST: &str = r#"query List($q: String!, $n: Int!) {
         isDraft
         mergeable
         reviewDecision
+        baseRefName
         updatedAt
         author { login }
         repository {
@@ -44,7 +45,6 @@ pub const DETAIL: &str = r#"query Detail($owner: String!, $name: String!, $numbe
       id
       body
       headRefName
-      baseRefName
       additions
       deletions
       commits(last: 1) {

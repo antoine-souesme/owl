@@ -21,7 +21,7 @@ impl Token {
 /// Masque le contenu : un jeton ne doit jamais apparaître dans une trace.
 impl fmt::Debug for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Token(masqué)")
+        f.write_str("Token(hidden)")
     }
 }
 
@@ -36,9 +36,9 @@ pub enum GhFailure {
 
 #[derive(Debug, Error)]
 pub enum TokenError {
-    #[error("owl a besoin de gh. Installe-le, puis lance `gh auth login`.")]
+    #[error("owl needs gh. Install it, then run `gh auth login`.")]
     GhMissing,
-    #[error("Non connecté à GitHub. Lance `gh auth login`.")]
+    #[error("Not signed in to GitHub. Run `gh auth login`.")]
     GhNotAuthenticated,
 }
 
@@ -147,7 +147,7 @@ mod tests {
         let error = resolve_from(None, None, || Err(GhFailure::NotFound)).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "owl a besoin de gh. Installe-le, puis lance `gh auth login`."
+            "owl needs gh. Install it, then run `gh auth login`."
         );
     }
 
@@ -156,7 +156,7 @@ mod tests {
         let error = resolve_from(None, None, || Err(GhFailure::NotAuthenticated)).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Non connecté à GitHub. Lance `gh auth login`."
+            "Not signed in to GitHub. Run `gh auth login`."
         );
     }
 
@@ -165,7 +165,7 @@ mod tests {
         let error = resolve_from(None, None, gh_ok("\n")).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Non connecté à GitHub. Lance `gh auth login`."
+            "Not signed in to GitHub. Run `gh auth login`."
         );
     }
 
@@ -177,6 +177,6 @@ mod tests {
             !debug_output.contains("ghp_secret"),
             "trace = {debug_output}"
         );
-        assert_eq!(debug_output, "Token(masqué)");
+        assert_eq!(debug_output, "Token(hidden)");
     }
 }

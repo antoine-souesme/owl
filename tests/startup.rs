@@ -21,7 +21,7 @@ fn without_a_token_or_gh_the_message_says_to_install_gh() {
     let error = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
         error.trim(),
-        "owl a besoin de gh. Installe-le, puis lance `gh auth login`."
+        "owl needs gh. Install it, then run `gh auth login`."
     );
 }
 
@@ -90,7 +90,7 @@ fn an_invalid_setting_value_names_its_key_and_its_path() {
     let (file, output) = owl_with_settings("page_size = 0\n");
     assert_startup_error(
         &output,
-        &format!("Réglages invalides dans {} : page_size.", file.display()),
+        &format!("Invalid settings in {}: page_size.", file.display()),
     );
 }
 
@@ -100,7 +100,7 @@ fn broken_toml_syntax_says_so_with_its_path() {
     assert_startup_error(
         &output,
         &format!(
-            "Réglages invalides dans {} : syntaxe TOML invalide.",
+            "Invalid settings in {}: invalid TOML syntax.",
             file.display()
         ),
     );
@@ -111,6 +111,6 @@ fn an_empty_filter_list_has_its_own_message() {
     let (_, output) = owl_with_settings("filters = []\n");
     assert_startup_error(
         &output,
-        "Aucun filtre actif : la recherche ramènerait tout GitHub.",
+        "No active filter: the search would return all of GitHub.",
     );
 }

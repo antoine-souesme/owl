@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, DETAIL_TITLE};
 use crate::ui::color;
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
@@ -18,9 +18,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" owl — détail ");
+    let block = Block::default().borders(Borders::ALL).title(DETAIL_TITLE);
     let inner = block.inner(areas[0]);
     frame.render_widget(block, areas[0]);
 

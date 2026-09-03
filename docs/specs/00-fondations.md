@@ -10,6 +10,18 @@ specs s'appuient sur lui.
 `owl` est un binaire unique, interactif. Lancé sans argument, il prend le contrôle du
 terminal, affiche un écran et le rend à la sortie. Il n'y a pas de sous-commandes.
 
+## Langue
+
+Deux langues, chacune à sa place :
+
+- **Anglais** : tout le code — identifiants, variables, noms de tests — et tout ce
+  que l'utilisateur lit, messages d'erreur du démarrage compris.
+- **Français** : les commentaires, les documents de `docs/`, et les messages de
+  commit.
+
+Les messages d'erreur venant de GitHub sont affichés tels quels : ils sont déjà en
+anglais, et les reformuler ferait perdre ce qu'ils disent.
+
 ## Technologie
 
 Rust, édition 2021.

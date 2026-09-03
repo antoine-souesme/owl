@@ -7,7 +7,9 @@
 
 mod render;
 
-pub use render::{ListRender, ListRow, MergeRender, Tone};
+pub use render::{
+    ListRender, ListRow, MergeRender, Tone, DETAIL_TITLE, LIST_TITLE, SELECTION_MARKER,
+};
 
 use render::truncate;
 
@@ -117,20 +119,18 @@ pub struct Loading {
 }
 
 /// Aide clavier, en fin de barre d'état. Le texte est ici, pas dans `ui`.
-const HELP_LIST: &str =
-    "↑↓ naviguer · → détail · m fusionner · r rafraîchir · o navigateur · q quitter";
-const HELP_DETAIL: &str =
-    "↑↓ défiler · ← liste · m fusionner · r rafraîchir · o navigateur · q quitter";
-const HELP_MERGE: &str = "↑↓ choisir · Entrée confirmer · Échap annuler";
+const HELP_LIST: &str = "↑↓ move · → details · m merge · r refresh · o browser · q quit";
+const HELP_DETAIL: &str = "↑↓ scroll · ← list · m merge · r refresh · o browser · q quit";
+const HELP_MERGE: &str = "↑↓ choose · Enter confirm · Esc cancel";
 
 /// Message affiché tant qu'aucune réponse n'est arrivée.
-const INITIAL_WAIT: &str = "Chargement…";
+const INITIAL_WAIT: &str = "Loading…";
 
-const DENIED_DRAFT: &str = "Pull request en brouillon, elle doit être publiée.";
-const DENIED_CONFLICTS: &str = "Conflits à résoudre.";
-const DENIED_UNKNOWN_STATE: &str = "État de fusion en cours de calcul, réessaie dans un instant.";
-const DENIED_NO_METHOD: &str = "Aucune méthode de fusion autorisée sur ce dépôt.";
-const DENIED_GONE: &str = "Pull request introuvable.";
+const DENIED_DRAFT: &str = "This pull request is a draft, it must be published first.";
+const DENIED_CONFLICTS: &str = "Conflicts to resolve.";
+const DENIED_UNKNOWN_STATE: &str = "Merge state being computed, try again in a moment.";
+const DENIED_NO_METHOD: &str = "No merge method allowed on this repository.";
+const DENIED_GONE: &str = "Pull request not found.";
 
 /// Attente imposée quand GitHub refuse pour limite d'appels sans donner
 /// d'heure de reprise — le cas des limites secondaires sans `retry-after`.
@@ -330,10 +330,20 @@ impl App {
                 match result {
                     Ok(()) => {
                         self.merge = None;
-                        self.notice = Some(format!("{} #{} fusionnée", key.repo, key.number));
-                        // La liste est redemandée tout de suite : la PR en
-                        // disparaîtra, et la sélection suit la règle du
-                        // rafraîchissement.
+                        self.notice = Some(format!("{} #{} merged", key.repo, key.number));
+                        // La PR fusionnée quitte la liste immédiatement, sans
+                        // attendre la réponse : l'index de recherche de GitHub
+                        // met un instant à l'oublier, et la revoir après une
+                        // fusion réussie ferait douter du résultat.
+                        let rest: Vec<PrSummary> = self
+                            .prs
+                            .iter()
+                            .filter(|pr| pr.key != key)
+                            .cloned()
+                            .collect();
+                        self.apply_list(rest);
+                        // La liste est tout de même redemandée : elle porte le
+                        // solde d'appels et les mises à jour des autres PR.
                         vec![self.fetch_list()]
                     }
                     // Message de GitHub tel quel : il dit quoi faire mieux
@@ -460,9 +470,9 @@ impl App {
         }
 
         vec![Command::Merge {
-            summary: summary,
+            summary,
             node_id,
-            method: method,
+            method,
         }]
     }
 
@@ -597,7 +607,7 @@ impl App {
         self.merge = Some(MergeDialog {
             key: summary.key.clone(),
             title: summary.title.clone(),
-            methods: methods,
+            methods,
             selected,
             state: MergeDialogState::Choosing,
         });
@@ -767,10 +777,10 @@ impl App {
                 parts.push((SUMMARY, self.list_summary()));
             }
             if let Some(at) = self.last_refresh {
-                parts.push((TIME, format!("mis à jour à {}", at.format("%H:%M"))));
+                parts.push((TIME, format!("updated at {}", at.format("%H:%M"))));
             }
             if self.loading.list || self.loading.detail {
-                parts.push((LOADING, "chargement…".to_string()));
+                parts.push((LOADING, "loading…".to_string()));
             }
             if let Some(error) = &self.error {
                 parts.push((ERROR, error.clone()));
@@ -819,7 +829,7 @@ impl App {
     /// par le retrait d'un morceau entier.
     fn list_summary(&self) -> String {
         match self.prs.len() {
-            0 => "Aucune pull request".to_string(),
+            0 => "No pull requests".to_string(),
             1 => "1 pull request".to_string(),
             count => format!("{count} pull requests"),
         }
@@ -838,8 +848,8 @@ fn assemble(parts: &[(u8, String)]) -> String {
 /// Annonce de suspension pour limite d'appels, avec son heure de reprise.
 fn suspension_message(resume_at: DateTime<Local>) -> String {
     format!(
-        "limite d'appels atteinte, reprise à {}",
-        resume_at.format("%H h %M")
+        "rate limit reached, resuming at {}",
+        resume_at.format("%H:%M")
     )
 }
 
@@ -868,6 +878,7 @@ pub(crate) mod tests {
             checks: ChecksState::Success,
             review: ReviewState::Approved,
             mergeable: MergeableState::Mergeable,
+            base_ref: "develop".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: RepoMergeRules {
                 squash: true,
@@ -1020,7 +1031,7 @@ pub(crate) mod tests {
         assert!(app.merge.is_none());
         assert_eq!(
             app.notice.as_deref(),
-            Some("Pull request en brouillon, elle doit être publiée.")
+            Some("This pull request is a draft, it must be published first.")
         );
     }
 
@@ -1032,7 +1043,7 @@ pub(crate) mod tests {
         };
         let app = app_with_dialog(conflicting);
         assert!(app.merge.is_none());
-        assert_eq!(app.notice.as_deref(), Some("Conflits à résoudre."));
+        assert_eq!(app.notice.as_deref(), Some("Conflicts to resolve."));
     }
 
     #[test]
@@ -1045,7 +1056,7 @@ pub(crate) mod tests {
         assert!(app.merge.is_none());
         assert_eq!(
             app.notice.as_deref(),
-            Some("État de fusion en cours de calcul, réessaie dans un instant.")
+            Some("Merge state being computed, try again in a moment.")
         );
     }
 
@@ -1061,7 +1072,7 @@ pub(crate) mod tests {
         assert!(app.merge.is_none());
         assert_eq!(
             app.notice.as_deref(),
-            Some("Aucune méthode de fusion autorisée sur ce dépôt.")
+            Some("No merge method allowed on this repository.")
         );
     }
 
@@ -1161,7 +1172,6 @@ pub(crate) mod tests {
             node_id: node_id.to_string(),
             body: String::new(),
             head_ref: "branche".to_string(),
-            base_ref: "develop".to_string(),
             checks: Vec::new(),
             reviews: Vec::new(),
             comments: Vec::new(),
@@ -1242,7 +1252,7 @@ pub(crate) mod tests {
 
         assert!(commands.is_empty(), "{commands:?}");
         assert!(app.merge.is_none());
-        assert_eq!(app.notice.as_deref(), Some("Pull request introuvable."));
+        assert_eq!(app.notice.as_deref(), Some("Pull request not found."));
     }
 
     #[test]
@@ -1259,10 +1269,40 @@ pub(crate) mod tests {
         });
 
         assert!(app.merge.is_none());
-        assert_eq!(app.notice.as_deref(), Some("moi/depot #142 fusionnée"));
+        assert_eq!(app.notice.as_deref(), Some("moi/depot #142 merged"));
         assert!(
             matches!(commands.as_slice(), [Command::FetchList { .. }]),
             "{commands:?}"
+        );
+        assert!(
+            app.prs.is_empty(),
+            "la PR fusionnée quitte la liste sans attendre la réponse : {:?}",
+            app.prs
+        );
+    }
+
+    #[test]
+    fn a_successful_merge_leaves_the_other_pull_requests_and_the_selection_in_place() {
+        let mut app = app_with(vec![
+            pr_with_rules(1, all_allowed()),
+            pr_with_rules(2, all_allowed()),
+            pr_with_rules(3, all_allowed()),
+        ]);
+        app.handle(Event::Key(Key::Down));
+        app.handle(Event::Key(Key::Char('m')));
+        confirm(&mut app);
+        app.handle(Event::MergeFinished {
+            key: pr(2).key,
+            result: Ok(()),
+        });
+
+        assert_eq!(
+            app.prs.iter().map(|pr| pr.key.number).collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert_eq!(
+            app.selected, 1,
+            "la sélection reste à la même place à l'écran"
         );
     }
 
@@ -1391,7 +1431,7 @@ pub(crate) mod tests {
         let app = app_with_dialog(draft);
         assert!(
             app.status_line(ROOMY)
-                .contains("Pull request en brouillon, elle doit être publiée."),
+                .contains("This pull request is a draft, it must be published first."),
             "{}",
             app.status_line(ROOMY)
         );
@@ -1515,7 +1555,7 @@ pub(crate) mod tests {
             result: Err(GithubError::Transport),
         });
         assert_eq!(app.prs, vec![pr(1)], "la liste précédente reste visible");
-        assert_eq!(app.error.as_deref(), Some("Réseau injoignable."));
+        assert_eq!(app.error.as_deref(), Some("Network unreachable."));
         assert!(!app.loading.list);
     }
 
@@ -1559,7 +1599,7 @@ pub(crate) mod tests {
             result: Ok(page(vec![])),
         });
         assert!(
-            app.status_line(ROOMY).starts_with("Aucune pull request"),
+            app.status_line(ROOMY).starts_with("No pull requests"),
             "{}",
             app.status_line(ROOMY)
         );
@@ -1585,7 +1625,7 @@ pub(crate) mod tests {
     #[test]
     fn the_status_bar_at_startup_announces_the_wait_only_once() {
         let (app, _) = app_started();
-        assert_eq!(app.status_line(ROOMY), format!("Chargement… · {HELP_LIST}"));
+        assert_eq!(app.status_line(ROOMY), format!("Loading… · {HELP_LIST}"));
     }
 
     #[test]
@@ -1598,7 +1638,7 @@ pub(crate) mod tests {
         let time = app.last_refresh.unwrap().format("%H:%M").to_string();
         assert_eq!(
             app.status_line(ROOMY),
-            format!("2 pull requests · mis à jour à {time} · {HELP_LIST}")
+            format!("2 pull requests · updated at {time} · {HELP_LIST}")
         );
     }
 
@@ -1613,7 +1653,7 @@ pub(crate) mod tests {
         let time = app.last_refresh.unwrap().format("%H:%M").to_string();
         assert_eq!(
             app.status_line(ROOMY),
-            format!("1 pull request · mis à jour à {time} · chargement… · {HELP_LIST}")
+            format!("1 pull request · updated at {time} · loading… · {HELP_LIST}")
         );
     }
 
@@ -1626,7 +1666,7 @@ pub(crate) mod tests {
         });
         assert_eq!(
             app.status_line(ROOMY),
-            format!("Réseau injoignable. · {HELP_LIST}"),
+            format!("Network unreachable. · {HELP_LIST}"),
             "aucune heure : aucun rafraîchissement n'a encore réussi"
         );
     }
@@ -1660,18 +1700,18 @@ pub(crate) mod tests {
 
         assert_eq!(
             app.status_line(ROOMY),
-            format!("2 pull requests · mis à jour à {time} · {HELP_LIST}"),
+            format!("2 pull requests · updated at {time} · {HELP_LIST}"),
             "au large, tout tient"
         );
 
         let narrow = app.status_line(80);
         assert!(
-            !narrow.contains("naviguer"),
+            !narrow.contains("move"),
             "l'aide est un rappel : elle part la première ({narrow})"
         );
         assert_eq!(
             narrow,
-            format!("2 pull requests · mis à jour à {time}"),
+            format!("2 pull requests · updated at {time}"),
             "le résumé et l'heure restent entiers"
         );
     }
@@ -1685,7 +1725,7 @@ pub(crate) mod tests {
         });
         assert_eq!(
             app.status_line(30),
-            "Réseau injoignable.",
+            "Network unreachable.",
             "l'erreur est ce qu'on garde en dernier"
         );
     }
@@ -1703,7 +1743,7 @@ pub(crate) mod tests {
         let bar = app.status_line(ROOMY);
         assert!(bar.ends_with(HELP_DETAIL), "{bar}");
         assert!(
-            bar.contains("← liste") && !bar.contains("→ détail"),
+            bar.contains("← list") && !bar.contains("→ details"),
             "une touche sans effet dans la vue n'est pas rappelée : {bar}"
         );
     }
@@ -1911,7 +1951,6 @@ pub(crate) mod tests {
             node_id: format!("PR_{number}"),
             body: "Première ligne.\nSeconde ligne.".to_string(),
             head_ref: "ma-branche".to_string(),
-            base_ref: "develop".to_string(),
             checks: vec![CheckRun {
                 name: "tests".to_string(),
                 state: ChecksState::Success,
@@ -2125,7 +2164,7 @@ pub(crate) mod tests {
             key: pr(1).key,
             result: Err(GithubError::Transport),
         });
-        assert_eq!(app.error.as_deref(), Some("Réseau injoignable."));
+        assert_eq!(app.error.as_deref(), Some("Network unreachable."));
         assert!(!app.loading.detail);
     }
 
@@ -2319,8 +2358,8 @@ pub(crate) mod tests {
             Ok(page_with_remaining(vec![pr(1)], 0, resume_at)),
         );
         let expected = format!(
-            "limite d'appels atteinte, reprise à {}",
-            resume_at.with_timezone(&Local).format("%H h %M")
+            "rate limit reached, resuming at {}",
+            resume_at.with_timezone(&Local).format("%H:%M")
         );
         let line = app.status_line(ROOMY);
         assert!(line.contains(&expected), "ligne = {line}");
@@ -2381,7 +2420,7 @@ pub(crate) mod tests {
         assert_eq!(app.prs.len(), 1, "la liste précédente reste visible");
         assert!(app.handle(Event::Tick).is_empty());
         let line = app.status_line(ROOMY);
-        assert!(line.contains("limite d'appels atteinte"), "ligne = {line}");
+        assert!(line.contains("rate limit reached"), "ligne = {line}");
     }
 
     #[test]
@@ -2418,9 +2457,9 @@ pub(crate) mod tests {
             !app.should_quit,
             "une panne réseau n'arrête pas le programme"
         );
-        assert_eq!(app.error.as_deref(), Some("Réseau injoignable."));
+        assert_eq!(app.error.as_deref(), Some("Network unreachable."));
         assert!(
-            app.status_line(ROOMY).contains("Réseau injoignable."),
+            app.status_line(ROOMY).contains("Network unreachable."),
             "l'erreur s'affiche dans la barre d'état"
         );
         assert!(

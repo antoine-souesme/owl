@@ -40,6 +40,7 @@ pub struct SearchNode {
     pub is_draft: Option<bool>,
     pub mergeable: Option<String>,
     pub review_decision: Option<String>,
+    pub base_ref_name: Option<String>,
     pub updated_at: Option<DateTime<Utc>>,
     pub author: Option<Actor>,
     pub repository: Option<RepositoryDto>,
@@ -133,7 +134,6 @@ pub struct PullRequestDetail {
     pub id: String,
     pub body: Option<String>,
     pub head_ref_name: String,
-    pub base_ref_name: String,
     pub additions: u32,
     pub deletions: u32,
     pub commits: Option<CommitConnection>,
@@ -220,13 +220,16 @@ impl SearchNode {
             author: self
                 .author
                 .as_ref()
-                .map(|auteur| auteur.login.clone())
+                .map(|author| author.login.clone())
                 .unwrap_or_else(|| UNKNOWN_AUTHOR.to_string()),
             url,
             is_draft: self.is_draft.unwrap_or(false),
             checks: rollup_state(self.commits.as_ref()),
             review: review_from_decision(self.review_decision.as_deref()),
             mergeable: mergeable_from(self.mergeable.as_deref()),
+            // Une branche cible absente laisse la colonne vide plutôt que de
+            // faire disparaître la pull request de la liste.
+            base_ref: self.base_ref_name.clone().unwrap_or_default(),
             updated_at,
             repo_rules: RepoMergeRules {
                 squash: repository.squash_merge_allowed,
@@ -243,7 +246,7 @@ impl SearchNode {
 /// `Pending`.
 fn rollup_state(commits: Option<&CommitConnection>) -> ChecksState {
     let rollup = commits
-        .and_then(|connexion| connexion.nodes.first())
+        .and_then(|connection| connection.nodes.first())
         .and_then(|node| node.commit.status_check_rollup.as_ref());
     match rollup {
         Some(rollup) => checks_from_rollup(rollup.state.as_deref()),
@@ -286,7 +289,7 @@ impl PullRequestDetail {
         let contexts = self
             .commits
             .as_ref()
-            .and_then(|connexion| connexion.nodes.first())
+            .and_then(|connection| connection.nodes.first())
             .and_then(|node| node.commit.status_check_rollup.as_ref())
             .and_then(|rollup| rollup.contexts.as_ref());
 
@@ -295,10 +298,9 @@ impl PullRequestDetail {
             node_id: self.id.clone(),
             body: self.body.clone().unwrap_or_default(),
             head_ref: self.head_ref_name.clone(),
-            base_ref: self.base_ref_name.clone(),
             checks: contexts
-                .map(|connexion| {
-                    connexion
+                .map(|connection| {
+                    connection
                         .nodes
                         .iter()
                         .flatten()
@@ -309,8 +311,8 @@ impl PullRequestDetail {
             reviews: self
                 .reviews
                 .as_ref()
-                .map(|connexion| {
-                    connexion
+                .map(|connection| {
+                    connection
                         .nodes
                         .iter()
                         .flatten()
@@ -321,8 +323,8 @@ impl PullRequestDetail {
             comments: self
                 .comments
                 .as_ref()
-                .map(|connexion| {
-                    connexion
+                .map(|connection| {
+                    connection
                         .nodes
                         .iter()
                         .flatten()
@@ -333,8 +335,8 @@ impl PullRequestDetail {
             files: self
                 .files
                 .as_ref()
-                .map(|connexion| {
-                    connexion
+                .map(|connection| {
+                    connection
                         .nodes
                         .iter()
                         .flatten()
@@ -399,7 +401,7 @@ impl CommentNode {
 /// supprimé.
 fn login_or_unknown(auteur: Option<&Actor>) -> String {
     auteur
-        .map(|auteur| auteur.login.clone())
+        .map(|author| author.login.clone())
         .unwrap_or_else(|| UNKNOWN_AUTHOR.to_string())
 }
 
@@ -595,7 +597,6 @@ mod tests {
             "Ajoute la fenêtre de fusion et ses raccourcis."
         );
         assert_eq!(detail.head_ref, "feat/fusion");
-        assert_eq!(detail.base_ref, "develop");
         assert_eq!(detail.additions, 214);
         assert_eq!(detail.deletions, 37);
         assert_eq!(detail.summary, summary());

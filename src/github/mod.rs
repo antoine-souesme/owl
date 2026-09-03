@@ -38,24 +38,24 @@ pub enum GithubError {
     /// est repris tel quel : il dit quoi faire mieux qu'un message maison.
     #[error("{0}")]
     Api(String),
-    #[error("Jeton refusé par GitHub. Lance `gh auth login` pour le renouveler.")]
+    #[error("Token refused by GitHub. Run `gh auth login` to renew it.")]
     Unauthorized,
-    #[error("Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`.")]
+    #[error("The token lacks the required permissions. Check the `repo` scope.")]
     Forbidden,
     /// L'heure de reprise est portée par la variante et non par le message :
     /// composer « limite d'appels atteinte, reprise à 14 h 32 » est une
     /// décision d'affichage, donc le travail de `app`, à la spec 05.
-    #[error("Limite d'appels atteinte.")]
+    #[error("Rate limit reached.")]
     RateLimited { reset_at: Option<DateTime<Utc>> },
-    #[error("GitHub a répondu {0}.")]
+    #[error("GitHub responded {0}.")]
     Http(u16),
-    #[error("Réponse illisible de GitHub.")]
+    #[error("Unreadable response from GitHub.")]
     Malformed,
     /// Aucun détail de `reqwest` n'est repris : ses messages peuvent citer
     /// l'URL et les en-têtes, où voyage le jeton.
-    #[error("Réseau injoignable.")]
+    #[error("Network unreachable.")]
     Transport,
-    #[error("Pull request introuvable.")]
+    #[error("Pull request not found.")]
     NotFound,
 }
 
@@ -88,11 +88,11 @@ impl Client {
     fn with_endpoint(token: &str, endpoint: &str) -> Result<Self, GithubError> {
         let mut headers = HeaderMap::new();
 
-        let mut autorisation = HeaderValue::from_str(&format!("Bearer {token}"))
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| GithubError::Unauthorized)?;
         // Marqué sensible : `reqwest` ne l'écrit pas dans ses traces.
-        autorisation.set_sensitive(true);
-        headers.insert(AUTHORIZATION, autorisation);
+        authorization.set_sensitive(true);
+        headers.insert(AUTHORIZATION, authorization);
         headers.insert(
             USER_AGENT,
             HeaderValue::from_static(concat!("owl/", env!("CARGO_PKG_VERSION"))),
@@ -301,7 +301,7 @@ mod tests {
 
     const RESPONSE: &str = include_str!("../../tests/fixtures/list.json");
 
-    /// Sert une seule réponse HTTP figée et rend l'adresse à viser.
+    /// Sert une seule réponse HTTP figée et rend l'address à viser.
     ///
     /// Un vrai serveur local plutôt qu'un client simulé : c'est le classement
     /// des réponses — code, en-têtes, corps — qui est testé ici, donc il faut
@@ -310,14 +310,14 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("un port libre doit être disponible");
-        let adresse = listener.local_addr().expect("adresse locale");
+        let address = listener.local_addr().expect("address locale");
 
         let mut response = format!(
             "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
             body.len()
         );
-        for (nom, value) in headers {
-            response.push_str(&format!("{nom}: {value}\r\n"));
+        for (name, value) in headers {
+            response.push_str(&format!("{name}: {value}\r\n"));
         }
         response.push_str("\r\n");
         response.push_str(body);
@@ -332,11 +332,11 @@ mod tests {
             let _ = stream.flush().await;
         });
 
-        format!("http://{adresse}/graphql")
+        format!("http://{address}/graphql")
     }
 
     /// Sert plusieurs réponses HTTP figées d'affilée, une par connexion
-    /// acceptée, dans l'ordre donné. Rend l'adresse à viser et le corps de
+    /// acceptée, dans l'ordre donné. Rend l'address à viser et le corps de
     /// chaque requête reçue, dans l'ordre où elles sont arrivées — c'est ce
     /// qui permet de vérifier qu'un appel enchaîne bien deux requêtes, et
     /// dans quel ordre.
@@ -346,7 +346,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("un port libre doit être disponible");
-        let adresse = listener.local_addr().expect("adresse locale");
+        let address = listener.local_addr().expect("address locale");
 
         let responses: Vec<String> = body
             .iter()
@@ -373,7 +373,7 @@ mod tests {
             }
         });
 
-        (format!("http://{adresse}/graphql"), receiver)
+        (format!("http://{address}/graphql"), receiver)
     }
 
     async fn call(
@@ -416,7 +416,7 @@ mod tests {
         assert!(matches!(error, GithubError::Unauthorized));
         assert_eq!(
             error.to_string(),
-            "Jeton refusé par GitHub. Lance `gh auth login` pour le renouveler."
+            "Token refused by GitHub. Run `gh auth login` to renew it."
         );
     }
 
@@ -432,7 +432,7 @@ mod tests {
         assert!(matches!(error, GithubError::Forbidden));
         assert_eq!(
             error.to_string(),
-            "Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`."
+            "The token lacks the required permissions. Check the `repo` scope."
         );
     }
 
@@ -454,7 +454,7 @@ mod tests {
         assert!(matches!(error, GithubError::Forbidden));
         assert_eq!(
             error.to_string(),
-            "Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`."
+            "The token lacks the required permissions. Check the `repo` scope."
         );
     }
 
@@ -544,7 +544,7 @@ mod tests {
         let error = call("502 Bad Gateway", &[], "")
             .await
             .expect_err("erreur attendue");
-        assert_eq!(error.to_string(), "GitHub a répondu 502.");
+        assert_eq!(error.to_string(), "GitHub responded 502.");
     }
 
     #[tokio::test]
@@ -579,6 +579,7 @@ mod tests {
             checks: crate::model::ChecksState::Success,
             review: crate::model::ReviewState::Approved,
             mergeable: crate::model::MergeableState::Mergeable,
+            base_ref: "develop".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: crate::model::RepoMergeRules {
                 squash: true,
@@ -610,6 +611,7 @@ mod tests {
             checks: crate::model::ChecksState::None,
             review: crate::model::ReviewState::None,
             mergeable: crate::model::MergeableState::Unknown,
+            base_ref: "develop".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: crate::model::RepoMergeRules {
                 squash: true,
@@ -641,6 +643,7 @@ mod tests {
             checks: ChecksState::Success,
             review: ReviewState::Approved,
             mergeable: MergeableState::Mergeable,
+            base_ref: "develop".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
             repo_rules: RepoMergeRules {
                 squash: true,
@@ -655,8 +658,8 @@ mod tests {
     async fn a_successful_merge_returns_nothing() {
         let body =
             r#"{"data":{"mergePullRequest":{"pullRequest":{"number":142,"state":"MERGED"}}}}"#;
-        let adresse = server("200 OK", &[], body).await;
-        let client = Client::with_endpoint("jeton", &adresse).expect("client construit");
+        let address = server("200 OK", &[], body).await;
+        let client = Client::with_endpoint("jeton", &address).expect("client construit");
 
         let result = client
             .merge_pull_request(
@@ -672,8 +675,8 @@ mod tests {
     #[tokio::test]
     async fn a_refused_merge_returns_the_github_message_verbatim() {
         let body = r#"{"data":null,"errors":[{"message":"At least 1 approving review is required by reviewers with write access."}]}"#;
-        let adresse = server("200 OK", &[], body).await;
-        let client = Client::with_endpoint("jeton", &adresse).expect("client construit");
+        let address = server("200 OK", &[], body).await;
+        let client = Client::with_endpoint("jeton", &address).expect("client construit");
 
         let error = client
             .merge_pull_request(
@@ -695,8 +698,8 @@ mod tests {
         const DETAIL: &str = include_str!("../../tests/fixtures/detail.json");
         const MUTATION: &str =
             r#"{"data":{"mergePullRequest":{"pullRequest":{"number":142,"state":"MERGED"}}}}"#;
-        let (adresse, mut queries) = chained_server(&[DETAIL, MUTATION]).await;
-        let client = Client::with_endpoint("jeton", &adresse).expect("client construit");
+        let (address, mut queries) = chained_server(&[DETAIL, MUTATION]).await;
+        let client = Client::with_endpoint("jeton", &address).expect("client construit");
 
         let result = client
             .merge_pull_request(&test_summary(), None, MergeMethod::Squash)

@@ -72,7 +72,7 @@ impl Drop for TerminalGuard {
     }
 }
 
-type Ecran = Terminal<CrosstermBackend<Stdout>>;
+type Screen = Terminal<CrosstermBackend<Stdout>>;
 
 /// Prend le contrôle du terminal et installe le crochet de panique.
 /// Le garde couvre la sortie normale et l'erreur, le crochet couvre la panique.
@@ -81,11 +81,11 @@ type Ecran = Terminal<CrosstermBackend<Stdout>>;
 /// une tâche n'arrête que cette tâche, alors que le crochet rend déjà le
 /// terminal. Sans un `Quit` poussé dans la file, la boucle continuerait à
 /// dessiner par-dessus le shell rendu à l'utilisateur.
-fn enter_terminal(envoi: UnboundedSender<Event>) -> Result<(Ecran, TerminalGuard)> {
+fn enter_terminal(sender: UnboundedSender<Event>) -> Result<(Screen, TerminalGuard)> {
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |infos| {
         restore_terminal();
-        let _ = envoi.send(Event::Quit);
+        let _ = sender.send(Event::Quit);
         previous_hook(infos);
     }));
 
@@ -116,36 +116,36 @@ async fn run(settings: config::Config, token: token::Token) -> Result<()> {
     // La première requête part avant l'écran : un jeton refusé ou des droits
     // insuffisants sont des erreurs de démarrage, et leur message doit sortir
     // sur la sortie d'erreur, pas finir en ligne de barre d'état.
-    let premiers = first_request(&mut state, &client).await?;
+    let first_events = first_request(&mut state, &client).await?;
 
-    let (envoi, mut reception) = mpsc::unbounded_channel::<Event>();
+    let (sender, mut inbox) = mpsc::unbounded_channel::<Event>();
 
     // Le résultat déjà obtenu entre dans la file avant tout le reste : la
     // boucle le traitera à son premier tour.
-    for evenement in premiers {
-        let _ = envoi.send(evenement);
+    for event in first_events {
+        let _ = sender.send(event);
     }
 
     // L'écran est pris avant de lancer les producteurs : le clavier doit lire
     // un terminal en mode brut, jamais un terminal encore en mode ligne.
-    let (mut terminal, _garde) = enter_terminal(envoi.clone())?;
+    let (mut terminal, _guard) = enter_terminal(sender.clone())?;
 
     // Producteur 1 : le clavier, dans une tâche bloquante dédiée.
-    spawn_keyboard(envoi.clone());
+    spawn_keyboard(sender.clone());
 
     // Producteur 2 : le minuteur de rafraîchissement, si activé.
     if interval > 0 {
-        spawn_timer(envoi.clone(), interval);
+        spawn_timer(sender.clone(), interval);
     }
 
     terminal.draw(|frame| ui::draw(frame, &state))?;
 
-    while let Some(evenement) = reception.recv().await {
-        let mut arret = false;
-        for command in state.handle(evenement) {
-            arret |= execute_command(command, &envoi, &client);
+    while let Some(event) = inbox.recv().await {
+        let mut stop = false;
+        for command in state.handle(event) {
+            stop |= execute_command(command, &sender, &client);
         }
-        if arret {
+        if stop {
             break;
         }
         terminal.draw(|frame| ui::draw(frame, &state))?;
@@ -187,7 +187,7 @@ async fn first_request(state: &mut App, client: &Arc<github::Client>) -> Result<
 /// n'entre jamais dans `app` ni dans `ui`.
 fn execute_command(
     command: Command,
-    envoi: &UnboundedSender<Event>,
+    sender: &UnboundedSender<Event>,
     client: &Arc<github::Client>,
 ) -> bool {
     match command {
@@ -197,29 +197,26 @@ fn execute_command(
             query,
             page_size,
         } => {
-            let envoi = envoi.clone();
+            let sender = sender.clone();
             let client = client.clone();
             tokio::spawn(async move {
                 let result = client.fetch_pull_requests(&query, page_size).await;
-                let _ = envoi.send(Event::ListLoaded {
-                    generation,
-                    result: result,
-                });
+                let _ = sender.send(Event::ListLoaded { generation, result });
             });
         }
         Command::FetchDetail {
             generation,
             summary,
         } => {
-            let envoi = envoi.clone();
+            let sender = sender.clone();
             let client = client.clone();
             let key = summary.key.clone();
             tokio::spawn(async move {
                 let result = client.fetch_detail(&summary).await;
-                let _ = envoi.send(Event::DetailLoaded {
+                let _ = sender.send(Event::DetailLoaded {
                     generation,
-                    key: key,
-                    result: result,
+                    key,
+                    result,
                 });
             });
         }
@@ -228,15 +225,12 @@ fn execute_command(
             node_id,
             method,
         } => {
-            let envoi = envoi.clone();
+            let sender = sender.clone();
             let client = client.clone();
             let key = summary.key.clone();
             tokio::spawn(async move {
                 let result = client.merge_pull_request(&summary, node_id, method).await;
-                let _ = envoi.send(Event::MergeFinished {
-                    key: key,
-                    result: result,
-                });
+                let _ = sender.send(Event::MergeFinished { key, result });
             });
         }
         Command::OpenInBrowser { url } => {
@@ -254,13 +248,13 @@ fn execute_command(
 
 /// Lit le clavier dans une tâche bloquante et traduit les touches pour `app`.
 /// La traduction est faite ici pour que `app` ne dépende pas de `crossterm`.
-fn spawn_keyboard(envoi: UnboundedSender<Event>) {
+fn spawn_keyboard(sender: UnboundedSender<Event>) {
     tokio::task::spawn_blocking(move || loop {
         // Le sondage évite de bloquer indéfiniment sur un canal fermé.
         match crossterm::event::poll(Duration::from_millis(200)) {
             Ok(true) => {}
             Ok(false) => {
-                if envoi.is_closed() {
+                if sender.is_closed() {
                     return;
                 }
                 continue;
@@ -269,7 +263,7 @@ fn spawn_keyboard(envoi: UnboundedSender<Event>) {
             // arriver, et le mode brut a désarmé Ctrl-C. On demande l'arrêt
             // plutôt que de laisser le programme figé.
             Err(_) => {
-                let _ = envoi.send(Event::Quit);
+                let _ = sender.send(Event::Quit);
                 return;
             }
         }
@@ -280,7 +274,7 @@ fn spawn_keyboard(envoi: UnboundedSender<Event>) {
             // redessine : sans lui, l'écran reste figé à l'ancienne taille
             // jusqu'à la touche ou le tour de minuteur suivant.
             Ok(TerminalEvent::Resize(..)) => {
-                if envoi.send(Event::Resize).is_err() {
+                if sender.send(Event::Resize).is_err() {
                     return;
                 }
                 continue;
@@ -302,14 +296,14 @@ fn spawn_keyboard(envoi: UnboundedSender<Event>) {
             (KeyCode::Esc, _) => Key::Esc,
             _ => Key::Other,
         };
-        if envoi.send(Event::Key(traduite)).is_err() {
+        if sender.send(Event::Key(traduite)).is_err() {
             return;
         }
     });
 }
 
 /// Émet un `Tick` à intervalle régulier.
-fn spawn_timer(envoi: UnboundedSender<Event>, seconds: u64) {
+fn spawn_timer(sender: UnboundedSender<Event>, seconds: u64) {
     tokio::spawn(async move {
         let mut minuteur = tokio::time::interval(Duration::from_secs(seconds));
         // Une boucle ralentie ne doit pas rattraper les tours manqués : sinon
@@ -320,7 +314,7 @@ fn spawn_timer(envoi: UnboundedSender<Event>, seconds: u64) {
         minuteur.tick().await;
         loop {
             minuteur.tick().await;
-            if envoi.send(Event::Tick).is_err() {
+            if sender.send(Event::Tick).is_err() {
                 return;
             }
         }

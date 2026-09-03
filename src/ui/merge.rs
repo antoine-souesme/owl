@@ -35,8 +35,8 @@ pub fn draw(frame: &mut Frame, area: Rect, render: &MergeRender) {
     let area = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 2,
-        width: width,
-        height: height,
+        width,
+        height,
     };
 
     // `Clear` d'abord : sans lui, la liste resterait visible sous la fenêtre.

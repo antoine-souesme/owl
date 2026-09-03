@@ -49,7 +49,7 @@ mod tests {
         let message = fatal_message(classify::<u8>(Err(GithubError::Unauthorized)));
         assert_eq!(
             message,
-            "Jeton refusé par GitHub. Lance `gh auth login` pour le renouveler."
+            "Token refused by GitHub. Run `gh auth login` to renew it."
         );
     }
 
@@ -58,7 +58,7 @@ mod tests {
         let message = fatal_message(classify::<u8>(Err(GithubError::Forbidden)));
         assert_eq!(
             message,
-            "Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`."
+            "The token lacks the required permissions. Check the `repo` scope."
         );
     }
 

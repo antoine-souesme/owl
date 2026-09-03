@@ -9,8 +9,11 @@
           "isDraft": false,
           "mergeable": "MERGEABLE",
           "reviewDecision": "APPROVED",
+          "baseRefName": "develop",
           "updatedAt": "2026-08-30T09:12:44Z",
-          "author": { "login": "moi" },
+          "author": {
+            "login": "moi"
+          },
           "repository": {
             "nameWithOwner": "moi/owl",
             "squashMergeAllowed": true,
@@ -19,7 +22,15 @@
             "deleteBranchOnMerge": true
           },
           "commits": {
-            "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }]
+            "nodes": [
+              {
+                "commit": {
+                  "statusCheckRollup": {
+                    "state": "SUCCESS"
+                  }
+                }
+              }
+            ]
           }
         },
         {},
@@ -30,6 +41,7 @@
           "isDraft": true,
           "mergeable": "UNKNOWN",
           "reviewDecision": null,
+          "baseRefName": "main",
           "updatedAt": "2026-08-29T18:03:00Z",
           "author": null,
           "repository": {
@@ -39,7 +51,9 @@
             "rebaseMergeAllowed": false,
             "deleteBranchOnMerge": false
           },
-          "commits": { "nodes": [] }
+          "commits": {
+            "nodes": []
+          }
         },
         {
           "number": 13,
@@ -48,8 +62,11 @@
           "isDraft": false,
           "mergeable": "CONFLICTING",
           "reviewDecision": "CHANGES_REQUESTED",
+          "baseRefName": "main",
           "updatedAt": "2026-08-28T07:45:10Z",
-          "author": { "login": "camille" },
+          "author": {
+            "login": "camille"
+          },
           "repository": {
             "nameWithOwner": "uneorg/site",
             "squashMergeAllowed": true,
@@ -58,7 +75,15 @@
             "deleteBranchOnMerge": false
           },
           "commits": {
-            "nodes": [{ "commit": { "statusCheckRollup": { "state": "PENDING" } } }]
+            "nodes": [
+              {
+                "commit": {
+                  "statusCheckRollup": {
+                    "state": "PENDING"
+                  }
+                }
+              }
+            ]
           }
         },
         {
@@ -68,8 +93,11 @@
           "isDraft": false,
           "mergeable": "MERGEABLE",
           "reviewDecision": "REVIEW_REQUIRED",
+          "baseRefName": "develop",
           "updatedAt": "2026-08-27T22:00:00Z",
-          "author": { "login": "moi" },
+          "author": {
+            "login": "moi"
+          },
           "repository": {
             "nameWithOwner": "moi/owl",
             "squashMergeAllowed": true,
@@ -78,7 +106,15 @@
             "deleteBranchOnMerge": true
           },
           "commits": {
-            "nodes": [{ "commit": { "statusCheckRollup": { "state": "FAILURE" } } }]
+            "nodes": [
+              {
+                "commit": {
+                  "statusCheckRollup": {
+                    "state": "FAILURE"
+                  }
+                }
+              }
+            ]
           }
         },
         {
@@ -89,7 +125,9 @@
           "mergeable": "MERGEABLE",
           "reviewDecision": null,
           "updatedAt": "2026-08-26T11:20:00Z",
-          "author": { "login": "moi" },
+          "author": {
+            "login": "moi"
+          },
           "repository": {
             "nameWithOwner": "moi/notes",
             "squashMergeAllowed": false,
@@ -98,11 +136,20 @@
             "deleteBranchOnMerge": false
           },
           "commits": {
-            "nodes": [{ "commit": { "statusCheckRollup": null } }]
+            "nodes": [
+              {
+                "commit": {
+                  "statusCheckRollup": null
+                }
+              }
+            ]
           }
         }
       ]
     },
-    "rateLimit": { "remaining": 4987, "resetAt": "2026-08-30T10:00:00Z" }
+    "rateLimit": {
+      "remaining": 4987,
+      "resetAt": "2026-08-30T10:00:00Z"
+    }
   }
 }

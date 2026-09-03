@@ -27,5 +27,7 @@ pub(crate) fn color(tone: Tone) -> Color {
         Tone::Red => Color::Red,
         Tone::Yellow => Color::Yellow,
         Tone::Gray => Color::DarkGray,
+        Tone::Cyan => Color::Cyan,
+        Tone::Blue => Color::Blue,
     }
 }
