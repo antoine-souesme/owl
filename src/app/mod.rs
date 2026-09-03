@@ -130,6 +130,7 @@ const REFUS_BROUILLON: &str = "Pull request en brouillon, elle doit être publi�
 const REFUS_CONFLITS: &str = "Conflits à résoudre.";
 const REFUS_ETAT_INCONNU: &str = "État de fusion en cours de calcul, réessaie dans un instant.";
 const REFUS_AUCUNE_METHODE: &str = "Aucune méthode de fusion autorisée sur ce dépôt.";
+const REFUS_DISPARUE: &str = "Pull request introuvable.";
 
 /// Attente imposée quand GitHub refuse pour limite d'appels sans donner
 /// d'heure de reprise — le cas des limites secondaires sans `retry-after`.
@@ -440,6 +441,11 @@ impl App {
             return Vec::new();
         };
         let Some(resume) = self.resume_affiche(&cle).cloned() else {
+            // La pull request a disparu de la liste et du cache entre
+            // l'ouverture de la fenêtre et la confirmation. Sans ce message,
+            // `Entrée` semblerait ne rien faire.
+            self.merge = None;
+            self.notice = Some(REFUS_DISPARUE.to_string());
             return Vec::new();
         };
         // Le détail en cache porte l'identifiant GraphQL. Sans lui, `github`
@@ -1216,6 +1222,24 @@ pub(crate) mod tests {
             }
             autre => panic!("commande inattendue : {autre:?}"),
         }
+    }
+
+    #[test]
+    fn confirmer_sur_une_pull_request_disparue_ferme_la_fenetre_avec_un_message() {
+        let mut app = app_garnie(vec![pr_avec_regles(142, tout_autorise())]);
+        app.handle(Event::Key(Key::Char('m')));
+        // Une réponse de liste déjà en vol au moment de l'ouverture retire la
+        // pull request visée.
+        app.handle(Event::ListLoaded {
+            generation: app.list_generation,
+            result: Ok(page(Vec::new())),
+        });
+
+        let commandes = app.handle(Event::Key(Key::Enter));
+
+        assert!(commandes.is_empty(), "{commandes:?}");
+        assert!(app.merge.is_none());
+        assert_eq!(app.notice.as_deref(), Some("Pull request introuvable."));
     }
 
     #[test]

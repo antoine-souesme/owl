@@ -104,7 +104,10 @@ pub fn load_from(path: &Path) -> Result<Config, ConfigError> {
             let texte = element.as_str().ok_or_else(|| invalide("filters"))?;
             filtres.push(texte.to_string());
         }
-        if filtres.is_empty() {
+        // Une liste de chaînes blanches ne vaut pas mieux qu'une liste vide :
+        // les fragments vides sont écartés de la requête, qui ramènerait
+        // alors tout GitHub.
+        if filtres.iter().all(|filtre| filtre.trim().is_empty()) {
             return Err(ConfigError::EmptyFilters);
         }
         reglages.filters = filtres;
@@ -247,6 +250,15 @@ page_size = 100
     #[test]
     fn liste_de_filtres_vide_refusee_avec_son_propre_message() {
         let erreur = lire("filters = []\n").unwrap_err();
+        assert_eq!(
+            erreur.to_string(),
+            "Aucun filtre actif : la recherche ramènerait tout GitHub."
+        );
+    }
+
+    #[test]
+    fn liste_de_filtres_toute_blanche_refusee_comme_une_liste_vide() {
+        let erreur = lire("filters = [\"\", \"   \"]\n").unwrap_err();
         assert_eq!(
             erreur.to_string(),
             "Aucun filtre actif : la recherche ramènerait tout GitHub."
