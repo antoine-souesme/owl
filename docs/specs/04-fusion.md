@@ -45,28 +45,36 @@ Une fenêtre centrée, par-dessus la liste, qui capte tout le clavier.
 │ Fix settings loading               │
 │                                    │
 │ Method:                            │
-│   > Squash and merge               │
+│     Create a merge commit          │
+│   → Squash and merge               │
 │     Rebase and merge               │
 │                                    │
 │ Enter to confirm · Esc to cancel   │
 └────────────────────────────────────┘
 ```
 
-Seules les méthodes autorisées par le dépôt sont listées, dans l'ordre écrasement,
-rebasage, commit de fusion — c'est `RepoMergeRules::allowed()` qui rend cet ordre,
-et nulle part ailleurs qu'il est recalculé. La sélection initiale est
-`preferred_merge_method` des réglages si cette méthode est autorisée, sinon la
-première de la liste.
+Les trois méthodes sont toujours listées, dans l'ordre commit de fusion,
+écrasement, rebasage — c'est `MERGE_METHODS` qui porte cet ordre, et nulle part
+ailleurs qu'il est recalculé. Celles que le dépôt refuse restent visibles, grisées :
+la fenêtre dit ainsi aussi ce qui n'est pas possible, plutôt que de le taire.
+`RepoMergeRules::allowed()` ne sert plus qu'à savoir lesquelles sont autorisées.
 
-La première ligne reprend la barre verticale de la vue liste entre le dépôt et le
-numéro.
+La sélection initiale est la dernière méthode confirmée dans la session si le dépôt
+l'autorise, sinon `preferred_merge_method` des réglages si elle est autorisée, sinon
+la première méthode autorisée en partant du haut. Cette mémoire vit dans
+`App::last_used_method` et ne survit pas à la session : `owl` ne réécrit jamais les
+réglages.
 
-Quand une seule méthode est autorisée, la liste est remplacée par une ligne
-« Method: squash and merge (enforced by the repository) », et la fenêtre ne demande
-plus que la confirmation.
+La fenêtre reprend le code couleur de la vue liste : le dépôt en cyan, la barre
+verticale et le numéro en gris, le titre en couleur par défaut, les méthodes
+refusées du même gris que les colonnes secondaires de la liste, et le message
+d'erreur de GitHub en rouge. Comme dans la liste, la ligne sélectionnée n'est pas
+surlignée : le marqueur suffit, et c'est le même — `SELECTION_MARKER`, défini une
+seule fois.
 
 `Entrée` confirme, `Échap` annule, les flèches haut et bas changent de méthode sans
-boucler. Aucune autre touche n'agit — sauf `Ctrl-C`, qui quitte `owl` même fenêtre
+boucler et sans jamais s'arrêter sur une méthode que le dépôt refuse. Sur un dépôt
+qui n'en autorise qu'une, elles ne déplacent donc rien. Aucune autre touche n'agit — sauf `Ctrl-C`, qui quitte `owl` même fenêtre
 ouverte : le mode brut l'a désarmée, et c'est à `owl` de l'honorer, sans quoi la
 seule sortie serait de tuer le terminal. `q`, lui, ne quitte pas tant que la fenêtre
 est ouverte. Tant qu'elle l'est, la barre d'état affiche
@@ -74,16 +82,23 @@ est ouverte. Tant qu'elle l'est, la barre d'état affiche
 habituelle.
 
 ```rust
+const MERGE_METHODS: [MergeMethod; 3] = [MergeMethod::Merge, MergeMethod::Squash, MergeMethod::Rebase];
+
+struct MergeChoice {
+    method: MergeMethod,
+    allowed: bool,   // autorisée par le dépôt
+}
+
 struct MergeDialog {
     key: PrKey,
     title: String,
-    methods: Vec<MergeMethod>,   // uniquement celles autorisées, dans l'ordre ci-dessus
+    methods: Vec<MergeChoice>,   // les trois, dans l'ordre de MERGE_METHODS
     selected: usize,
     state: MergeDialogState,
 }
 
 impl MergeDialog {
-    fn method(&self) -> Option<MergeMethod>;   // méthode sous le curseur
+    fn method(&self) -> Option<MergeMethod>;   // méthode sous le curseur, si elle est autorisée
 }
 
 enum MergeDialogState { Choosing, Submitting, Failed(String) }
@@ -97,15 +112,15 @@ que l'erreur de GitHub — sinon le rafraîchissement qui suit une fusion réuss
 effacerait aussitôt son annonce — et s'efface au premier appui sur une touche, une
 fois la fenêtre fermée.
 
-Libellés exacts des méthodes dans la liste : « Squash and merge », « Rebase and
-merge », « Create a merge commit ». La ligne à méthode unique et l'état `Submitting`
-utilisent la forme courte, sans capitale : « squash and merge », « rebase and
-merge », « create a merge commit ».
+Libellés exacts des méthodes dans la liste : « Create a merge commit », « Squash and
+merge », « Rebase and merge ». L'état `Submitting` utilise la forme courte, sans
+capitale : « create a merge commit », « squash and merge », « rebase and merge ».
 
-`app` expose la fenêtre sous la forme d'un `MergeRender { title, lines }` : un
-titre de cadre et des lignes déjà écrites, chevron de sélection compris. Toute la
-composition — le chevron, les libellés, la phrase « enforced by the repository », le
-message d'attente — est décidée dans `app/render.rs`. `merge_render` reçoit la
+`app` expose la fenêtre sous la forme d'un `MergeRender { title, lines }`, où chaque
+ligne est une suite de morceaux teintés comme une ligne de liste : un titre de cadre
+et des lignes déjà écrites, marqueur de sélection et couleurs comprises. Toute la
+composition — le marqueur, les libellés, les tons, le message d'attente — est
+décidée dans `app/render.rs`. `merge_render` reçoit la
 largeur disponible, exactement comme `status_line(width)`, et replie lui-même
 chaque ligne contre une largeur de contenu bornée — sur les limites de mots quand
 c'est possible, sans jamais perdre de contenu — pour qu'un message de GitHub trop
@@ -168,12 +183,16 @@ fusion, une confirmation.
 
 ## Critères de réussite
 
-- Un dépôt n'autorisant que l'écrasement ne propose jamais le rebasage ni le commit
-  de fusion.
-- Un dépôt qui en autorise trois les propose toutes, avec la méthode préférée
+- La fenêtre liste toujours les trois méthodes, dans l'ordre commit de fusion,
+  écrasement, rebasage.
+- Un dépôt n'autorisant que l'écrasement affiche le commit de fusion et le rebasage
+  en gris, et le curseur ne peut pas les atteindre.
+- Un dépôt qui autorise les trois les propose toutes, avec la méthode préférée
   présélectionnée.
 - Une méthode préférée non autorisée par le dépôt ne bloque rien : la première
-  méthode autorisée est présélectionnée.
+  méthode autorisée en partant du haut est présélectionnée.
+- Après une fusion réussie, la fenêtre suivante s'ouvre sur la méthode qui vient de
+  servir, si le dépôt l'autorise, et cela sans rien écrire sur le disque.
 - `m` sur une PR en brouillon, en conflit, ou sur un dépôt sans méthode autorisée
   n'ouvre pas la fenêtre et affiche le motif.
 - `Échap` en état `Choosing` ferme la fenêtre sans aucun appel.

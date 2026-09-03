@@ -8,7 +8,7 @@
 mod render;
 
 pub use render::{
-    ListRender, ListRow, MergeRender, Tone, DETAIL_TITLE, LIST_TITLE, SELECTION_MARKER,
+    ListRender, ListRow, MergeLine, MergeRender, Tone, DETAIL_TITLE, LIST_TITLE, SELECTION_MARKER,
 };
 
 use render::truncate;
@@ -154,24 +154,64 @@ pub enum MergeDialogState {
     Failed(String),
 }
 
+/// Ordre d'affichage des méthodes dans la fenêtre, de haut en bas. Les trois
+/// sont toujours montrées : celles que le dépôt refuse restent visibles,
+/// grisées, pour que la fenêtre dise aussi ce qui n'est pas possible.
+pub const MERGE_METHODS: [MergeMethod; 3] =
+    [MergeMethod::Merge, MergeMethod::Squash, MergeMethod::Rebase];
+
+/// Une méthode de la fenêtre, et si le dépôt l'autorise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergeChoice {
+    pub method: MergeMethod,
+    pub allowed: bool,
+}
+
 /// Fenêtre de confirmation de fusion. Tant qu'elle existe, elle capte le
 /// clavier et suspend le rafraîchissement automatique.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MergeDialog {
     pub key: PrKey,
     pub title: String,
-    /// Uniquement les méthodes autorisées par le dépôt, dans l'ordre
-    /// écrasement, rebasage, commit de fusion.
-    pub methods: Vec<MergeMethod>,
+    /// Les trois méthodes, dans l'ordre de `MERGE_METHODS`, chacune avec
+    /// l'autorisation du dépôt.
+    pub methods: Vec<MergeChoice>,
     pub selected: usize,
     pub state: MergeDialogState,
 }
 
 impl MergeDialog {
-    /// Méthode sous le curseur. `None` seulement sur une liste vide, cas que
-    /// les contrôles avant fusion écartent déjà.
+    /// Méthode sous le curseur, si le dépôt l'autorise. `None` quand le
+    /// curseur est ailleurs, cas que l'ouverture de la fenêtre écarte déjà :
+    /// elle ne se pose jamais sur une méthode refusée.
     pub fn method(&self) -> Option<MergeMethod> {
-        self.methods.get(self.selected).copied()
+        self.methods
+            .get(self.selected)
+            .filter(|choice| choice.allowed)
+            .map(|choice| choice.method)
+    }
+}
+
+/// Méthode autorisée la plus proche à partir de `from`, dans la direction
+/// donnée. La sélection ne boucle pas, comme celle de la liste, et ne
+/// s'arrête jamais sur une méthode que le dépôt refuse : quand il n'y a rien
+/// d'autorisé plus loin, le curseur ne bouge pas.
+fn next_allowed(methods: &[MergeChoice], from: usize, downwards: bool) -> usize {
+    let mut index = from;
+    loop {
+        index = if downwards {
+            index + 1
+        } else {
+            match index.checked_sub(1) {
+                Some(previous) => previous,
+                None => return from,
+            }
+        };
+        match methods.get(index) {
+            Some(choice) if choice.allowed => return index,
+            Some(_) => continue,
+            None => return from,
+        }
     }
 }
 
@@ -206,6 +246,10 @@ pub struct App {
     pub view: View,
     /// Fenêtre de fusion ouverte, s'il y en a une.
     pub merge: Option<MergeDialog>,
+    /// Dernière méthode ayant servi à une fusion réussie. Elle présélectionne
+    /// la fenêtre suivante et ne vit que le temps de la session : `owl` ne
+    /// réécrit jamais les réglages.
+    last_used_method: Option<MergeMethod>,
     /// Message posé par `owl` lui-même : motif de refus de `m`, ou fusion
     /// réussie. Distinct de `error`, qui porte les messages de GitHub et se
     /// vide à la première réponse réussie — ce qui effacerait aussitôt
@@ -233,6 +277,7 @@ impl App {
             last_refresh: None,
             view: View::List,
             merge: None,
+            last_used_method: None,
             notice: None,
             details: HashMap::new(),
             list_generation: 0,
@@ -329,6 +374,11 @@ impl App {
                 }
                 match result {
                     Ok(()) => {
+                        // La méthode qui vient de servir présélectionnera la
+                        // fenêtre suivante, avant que la fenêtre disparaisse.
+                        if let Some(method) = self.merge.as_ref().and_then(MergeDialog::method) {
+                            self.last_used_method = Some(method);
+                        }
                         self.merge = None;
                         self.notice = Some(format!("{} #{} merged", key.repo, key.number));
                         // La PR fusionnée quitte la liste immédiatement, sans
@@ -409,14 +459,11 @@ impl App {
 
         let outcome = match (&dialog.state, key_pressed) {
             (MergeDialogState::Choosing, Key::Up) => {
-                // La sélection ne boucle pas, comme celle de la liste.
-                dialog.selected = dialog.selected.saturating_sub(1);
+                dialog.selected = next_allowed(&dialog.methods, dialog.selected, false);
                 Outcome::Nothing
             }
             (MergeDialogState::Choosing, Key::Down) => {
-                if dialog.selected + 1 < dialog.methods.len() {
-                    dialog.selected += 1;
-                }
+                dialog.selected = next_allowed(&dialog.methods, dialog.selected, true);
                 Outcome::Nothing
             }
             (MergeDialogState::Choosing | MergeDialogState::Failed(_), Key::Esc) => Outcome::Close,
@@ -591,18 +638,36 @@ impl App {
             return Vec::new();
         }
 
-        let methods = summary.repo_rules.allowed();
-        if methods.is_empty() {
+        let allowed = summary.repo_rules.allowed();
+        if allowed.is_empty() {
             self.notice = Some(DENIED_NO_METHOD.to_string());
             return Vec::new();
         }
-
-        // La méthode préférée si le dépôt l'autorise, sinon la première de la
-        // liste — donc l'écrasement, puis le rebasage, puis le commit de fusion.
-        let selected = methods
+        let methods: Vec<MergeChoice> = MERGE_METHODS
             .iter()
-            .position(|method| *method == self.config.preferred_merge_method)
-            .unwrap_or(0);
+            .map(|method| MergeChoice {
+                method: *method,
+                allowed: allowed.contains(method),
+            })
+            .collect();
+
+        // La dernière méthode ayant servi dans la session, puis celle des
+        // réglages, chacune retenue seulement si le dépôt l'autorise. À
+        // défaut, la première autorisée en partant du haut : le dépôt en
+        // autorise au moins une, ce `unwrap_or` ne sert donc jamais.
+        let selected = [
+            self.last_used_method,
+            Some(self.config.preferred_merge_method),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|wanted| {
+            methods
+                .iter()
+                .position(|choice| choice.allowed && choice.method == wanted)
+        })
+        .or_else(|| methods.iter().position(|choice| choice.allowed))
+        .unwrap_or(0);
 
         self.merge = Some(MergeDialog {
             key: summary.key.clone(),
@@ -967,17 +1032,47 @@ pub(crate) mod tests {
         app
     }
 
-    #[test]
-    fn a_repo_allowing_only_squash_offers_only_squash() {
-        let rules = RepoMergeRules {
+    /// L'écrasement seul, les deux autres refusées.
+    fn squash_only() -> RepoMergeRules {
+        RepoMergeRules {
             squash: true,
             merge: false,
             rebase: false,
             delete_branch_on_merge: true,
-        };
-        let app = app_with_dialog(pr_with_rules(1, rules));
+        }
+    }
+
+    #[test]
+    fn the_dialog_always_lists_the_three_methods_in_order() {
+        let app = app_with_dialog(pr_with_rules(1, squash_only()));
         let dialog = app.merge.as_ref().expect("la fenêtre doit être ouverte");
-        assert_eq!(dialog.methods, vec![MergeMethod::Squash]);
+        assert_eq!(
+            dialog.methods,
+            vec![
+                MergeChoice {
+                    method: MergeMethod::Merge,
+                    allowed: false
+                },
+                MergeChoice {
+                    method: MergeMethod::Squash,
+                    allowed: true
+                },
+                MergeChoice {
+                    method: MergeMethod::Rebase,
+                    allowed: false
+                },
+            ]
+        );
+        assert_eq!(dialog.method(), Some(MergeMethod::Squash));
+    }
+
+    #[test]
+    fn the_arrows_never_land_on_a_method_the_repo_refuses() {
+        let mut app = app_with_dialog(pr_with_rules(1, squash_only()));
+        for key in [Key::Up, Key::Up, Key::Down, Key::Down] {
+            app.handle(Event::Key(key));
+            assert_eq!(chosen_method(&app), MergeMethod::Squash);
+        }
     }
 
     #[test]
@@ -1000,15 +1095,12 @@ pub(crate) mod tests {
         app.handle(Event::Key(Key::Char('m')));
 
         let dialog = app.merge.as_ref().expect("la fenêtre doit être ouverte");
-        assert_eq!(
-            dialog.methods,
-            vec![MergeMethod::Squash, MergeMethod::Rebase, MergeMethod::Merge]
-        );
+        assert!(dialog.methods.iter().all(|choice| choice.allowed));
         assert_eq!(dialog.method(), Some(MergeMethod::Rebase));
     }
 
     #[test]
-    fn a_preferred_method_not_allowed_falls_back_to_the_first() {
+    fn a_preferred_method_not_allowed_falls_back_to_the_first_allowed_from_the_top() {
         // Réglages par défaut : la méthode préférée est l'écrasement.
         let rules = RepoMergeRules {
             squash: false,
@@ -1018,7 +1110,48 @@ pub(crate) mod tests {
         };
         let app = app_with_dialog(pr_with_rules(1, rules));
         let dialog = app.merge.as_ref().expect("la fenêtre doit être ouverte");
-        assert_eq!(dialog.method(), Some(MergeMethod::Rebase));
+        assert_eq!(dialog.method(), Some(MergeMethod::Merge));
+    }
+
+    #[test]
+    fn the_next_dialog_opens_on_the_method_that_just_served() {
+        let mut app = app_with(vec![
+            pr_with_rules(1, all_allowed()),
+            pr_with_rules(2, all_allowed()),
+        ]);
+        // Réglages par défaut : l'écrasement. On descend sur le rebasage.
+        app.handle(Event::Key(Key::Char('m')));
+        app.handle(Event::Key(Key::Down));
+        assert_eq!(chosen_method(&app), MergeMethod::Rebase);
+        let key = app.merge.as_ref().expect("fenêtre ouverte").key.clone();
+        app.handle(Event::Key(Key::Enter));
+        app.handle(Event::MergeFinished {
+            key,
+            result: Ok(()),
+        });
+
+        app.handle(Event::Key(Key::Char('m')));
+        assert_eq!(chosen_method(&app), MergeMethod::Rebase);
+    }
+
+    #[test]
+    fn a_last_used_method_the_repo_refuses_falls_back_to_the_settings() {
+        let mut app = app_with(vec![
+            pr_with_rules(1, all_allowed()),
+            pr_with_rules(2, squash_only()),
+        ]);
+        app.handle(Event::Key(Key::Char('m')));
+        app.handle(Event::Key(Key::Down));
+        assert_eq!(chosen_method(&app), MergeMethod::Rebase);
+        let key = app.merge.as_ref().expect("fenêtre ouverte").key.clone();
+        app.handle(Event::Key(Key::Enter));
+        app.handle(Event::MergeFinished {
+            key,
+            result: Ok(()),
+        });
+
+        app.handle(Event::Key(Key::Char('m')));
+        assert_eq!(chosen_method(&app), MergeMethod::Squash);
     }
 
     #[test]
@@ -1087,16 +1220,18 @@ pub(crate) mod tests {
     #[test]
     fn the_arrows_change_method_without_wrapping() {
         let mut app = app_with_dialog(pr_with_rules(1, all_allowed()));
-        // Départ sur l'écrasement, méthode préférée par défaut.
+        // Départ sur l'écrasement, méthode préférée par défaut, au milieu.
         app.handle(Event::Key(Key::Up));
-        assert_eq!(chosen_method(&app), MergeMethod::Squash);
+        assert_eq!(chosen_method(&app), MergeMethod::Merge);
+        app.handle(Event::Key(Key::Up));
+        assert_eq!(chosen_method(&app), MergeMethod::Merge);
 
+        app.handle(Event::Key(Key::Down));
+        assert_eq!(chosen_method(&app), MergeMethod::Squash);
         app.handle(Event::Key(Key::Down));
         assert_eq!(chosen_method(&app), MergeMethod::Rebase);
         app.handle(Event::Key(Key::Down));
-        assert_eq!(chosen_method(&app), MergeMethod::Merge);
-        app.handle(Event::Key(Key::Down));
-        assert_eq!(chosen_method(&app), MergeMethod::Merge);
+        assert_eq!(chosen_method(&app), MergeMethod::Rebase);
     }
 
     /// Méthode sous le curseur de la fenêtre ouverte.
