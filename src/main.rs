@@ -5,6 +5,7 @@ mod config;
 mod filter;
 mod github;
 mod model;
+mod notify;
 mod startup;
 mod token;
 mod ui;
@@ -231,6 +232,13 @@ fn execute_command(
             tokio::spawn(async move {
                 let result = client.merge_pull_request(&summary, node_id, method).await;
                 let _ = sender.send(Event::MergeFinished { key, result });
+            });
+        }
+        Command::Notify { title, body } => {
+            // Dans une tâche bloquante, comme le navigateur : l'écran ne doit
+            // pas attendre que le système ait affiché sa bannière.
+            tokio::task::spawn_blocking(move || {
+                notify::send(&title, &body);
             });
         }
         Command::OpenInBrowser { url } => {

@@ -579,6 +579,7 @@ mod tests {
             checks: crate::model::ChecksState::Success,
             review: crate::model::ReviewState::Approved,
             mergeable: crate::model::MergeableState::Mergeable,
+            merge_state: crate::model::MergeState::Clean,
             base_ref: "develop".to_string(),
             head_ref: "ma-branche".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
@@ -612,6 +613,7 @@ mod tests {
             checks: crate::model::ChecksState::None,
             review: crate::model::ReviewState::None,
             mergeable: crate::model::MergeableState::Unknown,
+            merge_state: crate::model::MergeState::Blocked,
             base_ref: "develop".to_string(),
             head_ref: "ma-branche".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
@@ -632,7 +634,9 @@ mod tests {
     /// Résumé minimal pour viser la mutation : seule la clé est lue quand
     /// l'identifiant GraphQL est déjà connu.
     fn test_summary() -> PrSummary {
-        use crate::model::{ChecksState, MergeableState, PrKey, RepoMergeRules, ReviewState};
+        use crate::model::{
+            ChecksState, MergeState, MergeableState, PrKey, RepoMergeRules, ReviewState,
+        };
         PrSummary {
             key: PrKey {
                 repo: "moi/depot".to_string(),
@@ -645,6 +649,7 @@ mod tests {
             checks: ChecksState::Success,
             review: ReviewState::Approved,
             mergeable: MergeableState::Mergeable,
+            merge_state: MergeState::Clean,
             base_ref: "develop".to_string(),
             head_ref: "ma-branche".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),

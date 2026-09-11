@@ -27,6 +27,7 @@ struct PrSummary {
     checks: ChecksState,
     review: ReviewState,
     mergeable: MergeableState,
+    merge_state: MergeState,      // verdict de fusion de GitHub, jamais affiché
     base_ref: String,             // branche visée par la fusion
     head_ref: String,             // branche d'origine de la fusion
     updated_at: DateTime<Utc>,
@@ -38,6 +39,8 @@ enum ChecksState { Success, Failure, Pending, None }
 enum ReviewState { Approved, ChangesRequested, ReviewRequired, None }
 
 enum MergeableState { Mergeable, Conflicting, Unknown }
+
+enum MergeState { Clean, Blocked, Unknown }
 
 /// Méthodes de fusion autorisées par le dépôt.
 struct RepoMergeRules {
@@ -107,6 +110,16 @@ nulle part ailleurs. `MergeMethod` vit dans `model`, et non dans `config`, parce
 renvoie `UNKNOWN` le temps du calcul ; `owl` traite `UNKNOWN` comme « on ne sait pas
 encore » et non comme un blocage.
 
+`MergeState` vient de `mergeStateStatus`, le verdict de synthèse de GitHub. Seul
+`CLEAN` vaut `Clean` : plus rien ne bloque la fusion. `UNKNOWN`, ainsi qu'un champ
+absent, valent `Unknown` — le verdict n'est pas encore calculé. Toutes les autres
+valeurs — `DIRTY`, `BLOCKED`, `BEHIND`, `DRAFT`, `UNSTABLE`, `HAS_HOOKS` — valent
+`Blocked` sans distinction : le motif exact est l'affaire de GitHub, et `owl` ne le
+redit pas.
+
+Ce champ ne s'affiche nulle part. Il sert uniquement à prévenir quand une pull
+request devient fusionnable, décrit dans `03-affichage-et-navigation.md`.
+
 Les cas que l'API laisse ouverts sont tranchés ainsi :
 
 | Situation | Traduction |
@@ -131,6 +144,7 @@ query List($q: String!, $n: Int!) {
         url
         isDraft
         mergeable
+        mergeStateStatus
         reviewDecision
         baseRefName
         headRefName
@@ -281,5 +295,7 @@ méthode, appartient à `04-fusion.md`.
 - Un nœud de type issue mélangé dans la réponse est ignoré sans faire échouer la
   traduction.
 - Une PR sans aucune CI donne `ChecksState::None`, distinct de `Pending`.
+- `mergeStateStatus` à `CLEAN` donne `MergeState::Clean` ; `UNKNOWN` et un champ
+  absent donnent `MergeState::Unknown` ; toute autre valeur donne `Blocked`.
 - Les deux formes de vérification, `CheckRun` et `StatusContext`, produisent des
   entrées équivalentes dans `PrDetail::checks`.

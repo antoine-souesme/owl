@@ -17,6 +17,7 @@ pub const LIST: &str = r#"query List($q: String!, $n: Int!) {
         url
         isDraft
         mergeable
+        mergeStateStatus
         reviewDecision
         baseRefName
         headRefName

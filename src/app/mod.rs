@@ -13,14 +13,16 @@ pub use render::{
 
 use render::truncate;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Local};
 
 use crate::config::Config;
 use crate::filter::{self, Filter};
 use crate::github::GithubError;
-use crate::model::{ListPage, MergeMethod, MergeableState, PrDetail, PrKey, PrSummary, RateLimit};
+use crate::model::{
+    ListPage, MergeMethod, MergeState, MergeableState, PrDetail, PrKey, PrSummary, RateLimit,
+};
 
 /// Numéro de génération d'une demande réseau. Un résultat dont la génération
 /// est périmée est ignoré, ce qui évite qu'une réponse lente écrase une
@@ -107,6 +109,12 @@ pub enum Command {
         node_id: Option<String>,
         method: MergeMethod,
     },
+    /// Prévient hors du terminal qu'une pull request est devenue fusionnable.
+    /// `app` écrit le texte, la boucle principale se charge de l'envoi.
+    Notify {
+        title: String,
+        body: String,
+    },
     Quit,
 }
 
@@ -122,6 +130,9 @@ pub struct Loading {
 const HELP_LIST: &str = "↑↓ move · → details · m merge · r refresh · o browser · q quit";
 const HELP_DETAIL: &str = "↑↓ scroll · ← list · m merge · r refresh · o browser · q quit";
 const HELP_MERGE: &str = "↑↓ choose · Enter confirm · Esc cancel";
+
+/// Titre de la notification annonçant qu'une pull request est fusionnable.
+const READY_TITLE: &str = "Ready to merge";
 
 /// Message affiché tant qu'aucune réponse n'est arrivée.
 const INITIAL_WAIT: &str = "Loading…";
@@ -261,6 +272,10 @@ pub struct App {
     pub details: HashMap<PrKey, CachedDetail>,
     list_generation: Generation,
     detail_generation: Generation,
+    /// Pull requests déjà annoncées comme fusionnables. `None` tant qu'aucune
+    /// liste n'est arrivée : la première ne fait que noter l'état de départ,
+    /// sans annoncer ce qui était déjà prêt avant le lancement.
+    announced: Option<HashSet<PrKey>>,
     /// Filtres des réglages, traduits une seule fois.
     filters: Vec<Filter>,
     config: Config,
@@ -283,6 +298,7 @@ impl App {
             last_used_method: None,
             notice: None,
             details: HashMap::new(),
+            announced: None,
             list_generation: 0,
             detail_generation: 0,
             filters: config
@@ -339,6 +355,7 @@ impl App {
                         self.last_refresh = Some(Local::now());
                         self.error = None;
                         self.note_rate_limit();
+                        return self.announce_ready();
                     }
                     // Message de GitHub repris tel quel, et liste conservée.
                     Err(error) => self.note_error(error),
@@ -750,6 +767,51 @@ impl App {
         self.remember_selection();
     }
 
+    /// Annonce les pull requests devenues fusionnables depuis la liste
+    /// précédente.
+    ///
+    /// Le verdict vient de GitHub : `owl` ne juge pas lui-même. Un verdict pas
+    /// encore calculé ne change rien — ni annonce, ni oubli —, sans quoi une
+    /// pull request prête serait annoncée de nouveau au calcul suivant. Une
+    /// pull request sortie de la liste est oubliée : son retour est une
+    /// nouvelle.
+    fn announce_ready(&mut self) -> Vec<Command> {
+        let Some(mut announced) = self.announced.take() else {
+            self.announced = Some(self.ready_keys());
+            return Vec::new();
+        };
+        announced.retain(|key| self.prs.iter().any(|pr| &pr.key == key));
+
+        let mut commands = Vec::new();
+        for pr in &self.prs {
+            match pr.merge_state {
+                MergeState::Clean => {
+                    if announced.insert(pr.key.clone()) {
+                        commands.push(Command::Notify {
+                            title: READY_TITLE.to_string(),
+                            body: format!("{} #{} · {}", pr.key.repo, pr.key.number, pr.title),
+                        });
+                    }
+                }
+                MergeState::Blocked => {
+                    announced.remove(&pr.key);
+                }
+                MergeState::Unknown => {}
+            }
+        }
+        self.announced = Some(announced);
+        commands
+    }
+
+    /// Clés des pull requests que GitHub déclare fusionnables.
+    fn ready_keys(&self) -> HashSet<PrKey> {
+        self.prs
+            .iter()
+            .filter(|pr| pr.merge_state == MergeState::Clean)
+            .map(|pr| pr.key.clone())
+            .collect()
+    }
+
     fn select_previous(&mut self) {
         // La sélection ne boucle pas : en haut de liste, rien ne se passe.
         if self.selected > 0 {
@@ -928,8 +990,8 @@ pub(crate) mod tests {
     use super::*;
 
     use crate::model::{
-        ChangedFile, CheckRun, ChecksState, Comment, MergeMethod, MergeableState, RepoMergeRules,
-        Review, ReviewState,
+        ChangedFile, CheckRun, ChecksState, Comment, MergeMethod, MergeState, MergeableState,
+        RepoMergeRules, Review, ReviewState,
     };
 
     /// Largeur où la barre d'état tient tout entière, aide comprise.
@@ -948,6 +1010,7 @@ pub(crate) mod tests {
             checks: ChecksState::Success,
             review: ReviewState::Approved,
             mergeable: MergeableState::Mergeable,
+            merge_state: MergeState::Clean,
             base_ref: "develop".to_string(),
             head_ref: "ma-branche".to_string(),
             updated_at: "2026-08-30T09:12:44Z".parse().expect("date valide"),
@@ -1003,6 +1066,11 @@ pub(crate) mod tests {
 
     /// Rafraîchit et livre la nouvelle liste, en respectant la génération.
     pub(crate) fn refresh_with(app: &mut App, list: Vec<PrSummary>) {
+        refresh_returning(app, list);
+    }
+
+    /// Comme `refresh_with`, mais rend les commandes nées de la nouvelle liste.
+    pub(crate) fn refresh_returning(app: &mut App, list: Vec<PrSummary>) -> Vec<Command> {
         let generation = match &app.handle(Event::Key(Key::Char('r')))[0] {
             Command::FetchList { generation, .. } => *generation,
             other => panic!("commande inattendue : {other:?}"),
@@ -1010,7 +1078,102 @@ pub(crate) mod tests {
         app.handle(Event::ListLoaded {
             generation,
             result: Ok(page(list)),
+        })
+    }
+
+    /// La même PR, mais que GitHub déclare bloquée.
+    fn blocked(number: u32) -> PrSummary {
+        PrSummary {
+            merge_state: MergeState::Blocked,
+            ..pr(number)
+        }
+    }
+
+    /// La même PR, mais dont GitHub n'a pas encore calculé le verdict.
+    fn not_computed_yet(number: u32) -> PrSummary {
+        PrSummary {
+            merge_state: MergeState::Unknown,
+            ..pr(number)
+        }
+    }
+
+    /// Les notifications d'une série de commandes, dans l'ordre.
+    fn notifications(commands: &[Command]) -> Vec<(String, String)> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                Command::Notify { title, body } => Some((title.clone(), body.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_pull_request_that_becomes_ready_asks_for_a_notification() {
+        let mut app = app_with(vec![blocked(42)]);
+        let commands = refresh_returning(&mut app, vec![pr(42)]);
+        assert_eq!(
+            notifications(&commands),
+            vec![(
+                "Ready to merge".to_string(),
+                "moi/depot #42 · Titre 42".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn the_very_first_list_announces_nothing() {
+        let (mut app, generation) = app_started();
+        let commands = app.handle(Event::ListLoaded {
+            generation,
+            result: Ok(page(vec![pr(1), pr(2)])),
         });
+        assert!(notifications(&commands).is_empty());
+    }
+
+    #[test]
+    fn a_pull_request_ready_since_a_while_is_announced_only_once() {
+        let mut app = app_with(vec![blocked(42)]);
+        refresh_with(&mut app, vec![pr(42)]);
+        let commands = refresh_returning(&mut app, vec![pr(42)]);
+        assert!(notifications(&commands).is_empty());
+    }
+
+    #[test]
+    fn a_verdict_not_computed_yet_does_not_announce_the_pull_request_again() {
+        let mut app = app_with(vec![blocked(42)]);
+        refresh_with(&mut app, vec![pr(42)]);
+        refresh_with(&mut app, vec![not_computed_yet(42)]);
+        let commands = refresh_returning(&mut app, vec![pr(42)]);
+        assert!(
+            notifications(&commands).is_empty(),
+            "un verdict pas encore calculé n'est pas un blocage"
+        );
+    }
+
+    #[test]
+    fn a_pull_request_blocked_again_is_announced_when_it_becomes_ready_again() {
+        let mut app = app_with(vec![blocked(42)]);
+        refresh_with(&mut app, vec![pr(42)]);
+        refresh_with(&mut app, vec![blocked(42)]);
+        let commands = refresh_returning(&mut app, vec![pr(42)]);
+        assert_eq!(notifications(&commands).len(), 1);
+    }
+
+    #[test]
+    fn each_pull_request_becoming_ready_gets_its_own_notification() {
+        let mut app = app_with(vec![blocked(1), blocked(2)]);
+        let commands = refresh_returning(&mut app, vec![pr(1), pr(2)]);
+        assert_eq!(notifications(&commands).len(), 2);
+    }
+
+    #[test]
+    fn a_pull_request_gone_from_the_list_is_announced_again_when_it_comes_back() {
+        let mut app = app_with(vec![blocked(42)]);
+        refresh_with(&mut app, vec![pr(42)]);
+        refresh_with(&mut app, vec![]);
+        let commands = refresh_returning(&mut app, vec![pr(42)]);
+        assert_eq!(notifications(&commands).len(), 1);
     }
 
     /// PR dont on choisit les règles du dépôt.
@@ -1178,6 +1341,7 @@ pub(crate) mod tests {
     fn a_conflict_does_not_open_the_dialog_and_says_why() {
         let conflicting = PrSummary {
             mergeable: MergeableState::Conflicting,
+            merge_state: MergeState::Blocked,
             ..pr(1)
         };
         let app = app_with_dialog(conflicting);
@@ -1189,6 +1353,7 @@ pub(crate) mod tests {
     fn an_unknown_merge_state_asks_to_wait() {
         let unknown = PrSummary {
             mergeable: MergeableState::Unknown,
+            merge_state: MergeState::Blocked,
             ..pr(1)
         };
         let app = app_with_dialog(unknown);

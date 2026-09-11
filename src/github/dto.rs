@@ -13,8 +13,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::model::{
-    ChangedFile, CheckRun, ChecksState, Comment, ListPage, MergeableState, PrDetail, PrKey,
-    PrSummary, RateLimit, RepoMergeRules, Review, ReviewState, UNKNOWN_AUTHOR,
+    ChangedFile, CheckRun, ChecksState, Comment, ListPage, MergeState, MergeableState, PrDetail,
+    PrKey, PrSummary, RateLimit, RepoMergeRules, Review, ReviewState, UNKNOWN_AUTHOR,
 };
 
 /// Contenu du champ `data` de la requête de liste.
@@ -39,6 +39,7 @@ pub struct SearchNode {
     pub url: Option<String>,
     pub is_draft: Option<bool>,
     pub mergeable: Option<String>,
+    pub merge_state_status: Option<String>,
     pub review_decision: Option<String>,
     pub base_ref_name: Option<String>,
     pub head_ref_name: Option<String>,
@@ -227,6 +228,7 @@ impl SearchNode {
             checks: rollup_state(self.commits.as_ref()),
             review: review_from_decision(self.review_decision.as_deref()),
             mergeable: mergeable_from(self.mergeable.as_deref()),
+            merge_state: merge_state_from(self.merge_state_status.as_deref()),
             // Une branche cible absente laisse la colonne vide plutôt que de
             // faire disparaître la pull request de la liste.
             base_ref: self.base_ref_name.clone().unwrap_or_default(),
@@ -282,6 +284,17 @@ fn mergeable_from(value: Option<&str>) -> MergeableState {
         Some("MERGEABLE") => MergeableState::Mergeable,
         Some("CONFLICTING") => MergeableState::Conflicting,
         _ => MergeableState::Unknown,
+    }
+}
+
+/// Verdict de synthèse de GitHub. Seul `CLEAN` autorise la fusion ; `UNKNOWN`
+/// et un champ absent veulent dire « pas encore calculé », et tout le reste —
+/// `DIRTY`, `BLOCKED`, `BEHIND`, `DRAFT`, `UNSTABLE`, `HAS_HOOKS` — bloque.
+fn merge_state_from(value: Option<&str>) -> MergeState {
+    match value {
+        Some("CLEAN") => MergeState::Clean,
+        None | Some("UNKNOWN") => MergeState::Unknown,
+        Some(_) => MergeState::Blocked,
     }
 }
 
@@ -435,7 +448,7 @@ fn review_from_review_state(state: Option<&str>) -> ReviewState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ChangedFile, CheckRun, PrDetail};
+    use crate::model::{ChangedFile, CheckRun, MergeState, PrDetail};
     use serde::Deserialize;
 
     /// Enveloppe de la réponse enregistrée, dont seul `data` nous intéresse.
@@ -486,6 +499,26 @@ mod tests {
                 delete_branch_on_merge: true,
             }
         );
+    }
+
+    #[test]
+    fn github_says_itself_that_nothing_blocks_the_merge() {
+        let page = page();
+        assert_eq!(page.pull_requests[0].merge_state, MergeState::Clean);
+    }
+
+    #[test]
+    fn every_other_verdict_of_github_blocks_the_merge() {
+        let page = page();
+        assert_eq!(page.pull_requests[1].merge_state, MergeState::Blocked);
+        assert_eq!(page.pull_requests[2].merge_state, MergeState::Blocked);
+    }
+
+    #[test]
+    fn a_verdict_not_computed_yet_is_neither_clean_nor_blocked() {
+        let page = page();
+        assert_eq!(page.pull_requests[3].merge_state, MergeState::Unknown);
+        assert_eq!(page.pull_requests[4].merge_state, MergeState::Unknown);
     }
 
     #[test]
