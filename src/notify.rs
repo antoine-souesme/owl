@@ -6,6 +6,11 @@
 
 use std::process::Command;
 
+/// Son joué avec la notification, choisi parmi ceux livrés avec macOS. Sans
+/// lui, la bannière passe en silence : c'est le réglage par défaut du système
+/// pour les notifications envoyées par un script.
+const SOUND: &str = "Glass";
+
 /// Envoie la notification. Ne rend rien : un refus du système, une machine
 /// sans `osascript`, un utilisateur qui a coupé les notifications de son
 /// terminal ne sont pas des erreurs de `owl`.
@@ -23,7 +28,7 @@ pub fn send(title: &str, body: &str) {
 /// titre de pull request de se faire passer pour du code.
 fn script(title: &str, body: &str) -> String {
     format!(
-        "display notification \"{}\" with title \"{}\"",
+        "display notification \"{}\" with title \"{}\" sound name \"{SOUND}\"",
         quoted(body),
         quoted(title)
     )
@@ -43,7 +48,8 @@ mod tests {
     fn the_script_carries_the_title_and_the_body() {
         assert_eq!(
             script("Ready to merge", "moi/owl #42 · Un titre"),
-            "display notification \"moi/owl #42 · Un titre\" with title \"Ready to merge\""
+            "display notification \"moi/owl #42 · Un titre\" with title \"Ready to merge\" \
+             sound name \"Glass\""
         );
     }
 
@@ -51,7 +57,7 @@ mod tests {
     fn a_quote_in_the_text_cannot_break_out_of_the_script() {
         assert_eq!(
             script("t", "un \"titre\" cité"),
-            "display notification \"un \\\"titre\\\" cité\" with title \"t\""
+            "display notification \"un \\\"titre\\\" cité\" with title \"t\" sound name \"Glass\""
         );
     }
 
@@ -59,7 +65,7 @@ mod tests {
     fn a_backslash_in_the_text_is_escaped_too() {
         assert_eq!(
             script("t", "a\\b"),
-            "display notification \"a\\\\b\" with title \"t\""
+            "display notification \"a\\\\b\" with title \"t\" sound name \"Glass\""
         );
     }
 }

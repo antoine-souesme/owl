@@ -335,7 +335,9 @@ c'est une nouvelle.
 
 L'envoi n'est pas l'affaire de `app`, qui ne fait aucun effet de bord : il émet
 `Command::Notify`, et la boucle principale appelle `osascript`, présent d'origine
-sur macOS. Un échec d'envoi reste silencieux : une notification perdue n'abîme pas
+sur macOS. La notification est accompagnée d'un son du système, « Glass » :
+sans lui, la bannière passe en silence, et une PR prête mérite qu'on lève les
+yeux. Un échec d'envoi reste silencieux : une notification perdue n'abîme pas
 l'écran et n'arrête pas `owl`.
 
 ## Sortie du terminal
