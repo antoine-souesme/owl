@@ -20,6 +20,7 @@ Refuser et prévenir l'utilisateur si l'une de ces conditions est vraie :
 
 - l'arbre de travail n'est pas propre (`git status --porcelain` renvoie du texte)
 - la version demandée n'est pas supérieure à celle de `Cargo.toml`
+- le tag `vX.Y.Z` existe déjà
 - `cargo test`, `cargo clippy -- -D warnings` ou `cargo fmt --check` échouent
 
 ## Étapes
@@ -30,9 +31,10 @@ Refuser et prévenir l'utilisateur si l'une de ces conditions est vraie :
 4. Remplacer la version dans `Cargo.toml`, puis `cargo build` pour mettre
    `Cargo.lock` à jour
 5. `git add Cargo.toml Cargo.lock && git commit -m "Version X.Y.Z"`
-6. `git push origin main`
-7. `git checkout develop && git merge main --no-ff -m "Retour de la version X.Y.Z"`
-8. `git push origin develop`
+6. `git tag vX.Y.Z` sur le commit de version
+7. `git push origin main --follow-tags`
+8. `git checkout develop && git merge main --no-ff -m "Retour de la version X.Y.Z"`
+9. `git push origin develop`
 
 Si une fusion tombe en conflit, s'arrêter et prévenir l'utilisateur : ne jamais
 résoudre un conflit de fusion de release tout seul.
@@ -43,5 +45,5 @@ Annoncer la version publiée et l'état des deux branches, en une ou deux phrase
 
 ## Hors périmètre
 
-Pas de tag, pas de release GitHub, pas de publication sur crates.io, pas de
+Pas de release GitHub, pas de publication sur crates.io, pas de
 pull request : uniquement les fusions et les poussées décrites ci-dessus.
