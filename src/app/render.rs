@@ -105,7 +105,7 @@ const SEPARATOR: &str = " │ ";
 
 /// Titres des cadres. Ce sont des messages : ils se décident ici, `ui` ne
 /// fait que les poser sur la bordure.
-pub const LIST_TITLE: &str = " Owl - Monitoring pull requests ";
+pub const LIST_TITLE: &str = concat!(" Owl - ", env!("CARGO_PKG_VERSION"), " ");
 pub const DETAIL_TITLE: &str = " Owl - Pull request details ";
 
 const TOO_NARROW: &str = "Widen the terminal: the repository and the number do not fit.";
@@ -1164,6 +1164,11 @@ mod tests {
             }
             other => panic!("rendu inattendu : {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_list_title_carries_the_version() {
+        assert_eq!(LIST_TITLE, format!(" Owl - {} ", env!("CARGO_PKG_VERSION")));
     }
 
     #[test]

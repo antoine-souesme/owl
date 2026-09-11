@@ -272,6 +272,11 @@ pub struct App {
     pub details: HashMap<PrKey, CachedDetail>,
     list_generation: Generation,
     detail_generation: Generation,
+    /// Pull requests fusionnées par `owl` pendant la session. Elles ne
+    /// reviennent jamais dans la liste : l'index de recherche de GitHub met
+    /// quelques secondes à les oublier et les renvoie encore, ce qui les
+    /// ferait réapparaître après leur disparition.
+    merged: HashSet<PrKey>,
     /// Pull requests déjà annoncées comme fusionnables. `None` tant qu'aucune
     /// liste n'est arrivée : la première ne fait que noter l'état de départ,
     /// sans annoncer ce qui était déjà prêt avant le lancement.
@@ -297,6 +302,7 @@ impl App {
             merge: None,
             last_used_method: None,
             notice: None,
+            merged: HashSet::new(),
             details: HashMap::new(),
             announced: None,
             list_generation: 0,
@@ -404,14 +410,12 @@ impl App {
                         // La PR fusionnée quitte la liste immédiatement, sans
                         // attendre la réponse : l'index de recherche de GitHub
                         // met un instant à l'oublier, et la revoir après une
-                        // fusion réussie ferait douter du résultat.
-                        let rest: Vec<PrSummary> = self
-                            .prs
-                            .iter()
-                            .filter(|pr| pr.key != key)
-                            .cloned()
-                            .collect();
-                        self.apply_list(rest);
+                        // fusion réussie ferait douter du résultat. Retenue
+                        // ici, elle ne revient pas non plus par les listes
+                        // suivantes, le temps que l'index se mette à jour.
+                        self.merged.insert(key.clone());
+                        let current = self.prs.clone();
+                        self.apply_list(current);
                         // La liste est tout de même redemandée : elle porte le
                         // solde d'appels et les mises à jour des autres PR.
                         vec![self.fetch_list()]
@@ -754,7 +758,10 @@ impl App {
     /// renvoyer en tête à chaque fusion.
     fn apply_list(&mut self, prs: Vec<PrSummary>) {
         let previous = self.selected;
-        self.prs = prs;
+        self.prs = prs
+            .into_iter()
+            .filter(|pr| !self.merged.contains(&pr.key))
+            .collect();
         self.selected = match &self.selected_key {
             Some(key) => self
                 .prs
@@ -1582,6 +1589,32 @@ pub(crate) mod tests {
         assert!(
             app.prs.is_empty(),
             "la PR fusionnée quitte la liste sans attendre la réponse : {:?}",
+            app.prs
+        );
+    }
+
+    #[test]
+    fn a_merged_pull_request_still_returned_by_github_does_not_come_back() {
+        let summary = pr_with_rules(142, all_allowed());
+        let key = summary.key.clone();
+        let mut app = app_with(vec![summary.clone()]);
+        app.handle(Event::Key(Key::Char('m')));
+        confirm(&mut app);
+        app.handle(Event::MergeFinished {
+            key,
+            result: Ok(()),
+        });
+
+        // L'index de recherche de GitHub met un instant à oublier la PR
+        // fusionnée : il la renvoie encore.
+        app.handle(Event::ListLoaded {
+            generation: app.list_generation,
+            result: Ok(page(vec![summary])),
+        });
+
+        assert!(
+            app.prs.is_empty(),
+            "la PR fusionnée ne revient pas : {:?}",
             app.prs
         );
     }
