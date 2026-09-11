@@ -27,6 +27,9 @@ struct PrSummary {
     checks: ChecksState,
     review: ReviewState,
     mergeable: MergeableState,
+    merge_state: MergeState,      // verdict de fusion de GitHub, jamais affiché
+    base_ref: String,             // branche visée par la fusion
+    head_ref: String,             // branche d'origine de la fusion
     updated_at: DateTime<Utc>,
     repo_rules: RepoMergeRules,
 }
@@ -37,6 +40,8 @@ enum ReviewState { Approved, ChangesRequested, ReviewRequired, None }
 
 enum MergeableState { Mergeable, Conflicting, Unknown }
 
+enum MergeState { Clean, Blocked, Unknown }
+
 /// Méthodes de fusion autorisées par le dépôt.
 struct RepoMergeRules {
     squash: bool,
@@ -45,13 +50,13 @@ struct RepoMergeRules {
     delete_branch_on_merge: bool,
 }
 
+enum MergeMethod { Squash, Rebase, Merge }
+
 /// Ce qu'il faut en plus pour dessiner la vue détail.
 struct PrDetail {
     summary: PrSummary,
     node_id: String,          // identifiant GraphQL, nécessaire à la fusion
     body: String,
-    head_ref: String,
-    base_ref: String,
     checks: Vec<CheckRun>,
     reviews: Vec<Review>,
     comments: Vec<Comment>,
@@ -66,9 +71,20 @@ struct Comment { author: String, body: String, created_at: DateTime<Utc> }
 struct ChangedFile { path: String, additions: u32, deletions: u32 }
 ```
 
+`base_ref` et `head_ref` sont portés par `PrSummary` et non par `PrDetail` : la
+colonne de la vue liste affiche la première, la fenêtre de fusion affiche les deux,
+et elles arrivent dans la même requête que la liste. La vue détail les lit sur le
+résumé qu'elle porte déjà, plutôt que de les demander deux fois — la fenêtre de
+fusion s'ouvre ainsi depuis la liste sans attendre la requête de détail.
+
 `RepoMergeRules` est porté par `PrSummary` et non par une structure de dépôt séparée :
 l'information arrive dans la même requête que la liste, et la fenêtre de fusion en a
 besoin sans appel supplémentaire.
+
+`RepoMergeRules::allowed()` rend les méthodes autorisées, dans l'ordre écrasement,
+rebasage, commit de fusion. C'est la seule source de cet ordre : il n'est recalculé
+nulle part ailleurs. `MergeMethod` vit dans `model`, et non dans `config`, parce que
+`github` en a besoin pour la mutation et n'a pas le droit de dépendre des réglages.
 
 ## Traduction des états
 
@@ -94,6 +110,25 @@ besoin sans appel supplémentaire.
 renvoie `UNKNOWN` le temps du calcul ; `owl` traite `UNKNOWN` comme « on ne sait pas
 encore » et non comme un blocage.
 
+`MergeState` vient de `mergeStateStatus`, le verdict de synthèse de GitHub. Seul
+`CLEAN` vaut `Clean` : plus rien ne bloque la fusion. `UNKNOWN`, ainsi qu'un champ
+absent, valent `Unknown` — le verdict n'est pas encore calculé. Toutes les autres
+valeurs — `DIRTY`, `BLOCKED`, `BEHIND`, `DRAFT`, `UNSTABLE`, `HAS_HOOKS` — valent
+`Blocked` sans distinction : le motif exact est l'affaire de GitHub, et `owl` ne le
+redit pas.
+
+Ce champ ne s'affiche nulle part. Il sert uniquement à prévenir quand une pull
+request devient fusionnable, décrit dans `03-affichage-et-navigation.md`.
+
+Les cas que l'API laisse ouverts sont tranchés ainsi :
+
+| Situation | Traduction |
+|---|---|
+| `author` à `null` (compte supprimé) | auteur affiché « inconnu » |
+| Aucun commit, ou `statusCheckRollup` absent | `ChecksState::None` |
+| Valeur d'état inconnue de la table | traitée comme une absence : `None`, ou `Unknown` pour `mergeable` |
+| Nœud sans les champs d'une pull request | ignoré, sans erreur |
+
 ## Requête de liste
 
 Une seule requête, du type `search`, portant la chaîne construite par le module
@@ -109,7 +144,10 @@ query List($q: String!, $n: Int!) {
         url
         isDraft
         mergeable
+        mergeStateStatus
         reviewDecision
+        baseRefName
+        headRefName
         updatedAt
         author { login }
         repository {
@@ -146,8 +184,6 @@ query Detail($owner: String!, $name: String!, $number: Int!) {
     pullRequest(number: $number) {
       id
       body
-      headRefName
-      baseRefName
       additions
       deletions
       commits(last: 1) {
@@ -170,8 +206,23 @@ Les vérifications arrivent sous deux formes, `CheckRun` (GitHub Actions et
 
 Les listes sont volontairement bornées : les vingt dernières relectures, les vingt
 derniers commentaires, les cent premiers fichiers. Il n'y a pas de pagination dans la
-vue détail. Quand une liste est tronquée, l'écran l'indique par une ligne
-« … et N de plus ».
+vue détail, et le dépassement de ces bornes n'est pas signalé : la requête ne demande
+aucun `totalCount`, et la touche `o` ouvre la pull request dans le navigateur pour
+tout voir.
+
+Les états qui n'existent que dans la vue détail sont traduits ainsi :
+
+| Situation | Traduction |
+|---|---|
+| `CheckRun` dont `status` n'est pas `COMPLETED` | `Pending` — la conclusion n'existe pas encore |
+| `CheckRun` de conclusion `SUCCESS` | `Success` |
+| `CheckRun` de conclusion `NEUTRAL` ou `SKIPPED` | `None` — aucun verdict sur le code |
+| `CheckRun` de toute autre conclusion | `Failure` |
+| `StatusContext` | table du `statusCheckRollup`, sur son champ `state` |
+| Nœud d'aucune des deux formes | ignoré |
+| Relecture d'état `APPROVED` / `CHANGES_REQUESTED` | `Approved` / `ChangesRequested` |
+| Relecture d'un autre état (`COMMENTED`, `DISMISSED`, `PENDING`) | `None` |
+| Relecture sans `submittedAt` (en attente, jamais soumise) | ignorée |
 
 ## Mutation de fusion
 
@@ -187,6 +238,9 @@ La fusion a besoin de l'identifiant GraphQL de la PR, absent de la requête de l
 Il est donc récupéré juste avant la fusion si la vue détail n'a pas déjà été ouverte.
 Ce point est détaillé en `04-fusion.md`.
 
+La traduction de `MergeMethod` vers `SQUASH`, `REBASE` et `MERGE` est faite par
+`github`, et nulle part ailleurs : `model` ne connaît pas ce vocabulaire.
+
 La suppression de la branche après fusion n'est pas demandée par `owl` : elle suit le
 réglage `deleteBranchOnMerge` du dépôt, appliqué par GitHub lui-même.
 
@@ -201,8 +255,38 @@ traitement des erreurs :
 - succès, avec des données ;
 - réponse HTTP 200 contenant un tableau `errors` — erreur applicative ;
 - réponse HTTP 401 ou 403 — jeton invalide ou droits insuffisants ;
-- limite d'appels atteinte, reconnue à la réponse 403 accompagnée d'un en-tête de
-  réinitialisation, ou à un `rateLimit.remaining` nul.
+- limite d'appels atteinte. GitHub pose les en-têtes `x-ratelimit-*` sur la
+  quasi-totalité de ses réponses, refus de droits compris : leur seule présence
+  ne dit rien. C'est le solde `x-ratelimit-remaining` à zéro qui signale la
+  limite primaire atteinte. La limite secondaire se reconnaît à l'en-tête
+  `retry-after`, un délai en secondes converti en heure de reprise. Une réponse
+  429 est traitée comme une 403.
+
+## Note d'implémentation
+
+Les fondations laissaient un bouchon : `github::fetch_pull_requests` renvoyait une
+liste vide sans toucher au réseau, et son erreur était un simple `String`. Cette
+spec le remplace par `github::Client`, dont l'erreur est le type `thiserror`
+`GithubError`. Trois conséquences :
+
+- `app::Event::Data` porte `Result<ListPage, GithubError>`. `app` connaît donc le
+  type d'erreur de `github`, ce que les règles de dépendance autorisent : elles
+  interdisent à `github` de connaître `app`, pas l'inverse, et `app` ne gagne
+  aucun appel réseau au passage.
+- Le solde d'appels voyage avec la liste, dans `ListPage { pull_requests,
+  rate_limit }`. Un `rateLimit.remaining` nul dans une réponse réussie n'est pas
+  une erreur : les données sont rendues, le solde est transmis, et la suspension
+  du rafraîchissement reste le sujet de `05-erreurs-et-tests.md`.
+  `GithubError::RateLimited` est réservé au refus de GitHub, reconnu au solde
+  `x-ratelimit-remaining` à zéro ou à l'en-tête `retry-after` d'une limite
+  secondaire.
+- La chaîne de recherche est, jusqu'à `02-filtres.md`, la simple jointure des
+  filtres des réglages. `is:pr` n'est pas ajouté ici : c'est une règle de
+  `build_query`, et la dupliquer serait la faire vivre à deux endroits.
+
+La mutation de fusion est posée en constante dans `github::queries`, et n'est
+appelée par aucune fonction à ce stade : son déclenchement, comme le choix de la
+méthode, appartient à `04-fusion.md`.
 
 ## Critères de réussite
 
@@ -211,5 +295,7 @@ traitement des erreurs :
 - Un nœud de type issue mélangé dans la réponse est ignoré sans faire échouer la
   traduction.
 - Une PR sans aucune CI donne `ChecksState::None`, distinct de `Pending`.
+- `mergeStateStatus` à `CLEAN` donne `MergeState::Clean` ; `UNKNOWN` et un champ
+  absent donnent `MergeState::Unknown` ; toute autre valeur donne `Blocked`.
 - Les deux formes de vérification, `CheckRun` et `StatusContext`, produisent des
   entrées équivalentes dans `PrDetail::checks`.

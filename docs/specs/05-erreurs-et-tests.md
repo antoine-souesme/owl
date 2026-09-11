@@ -17,12 +17,21 @@ dans la barre d'état, et le prochain rafraîchissement retente.
 
 | Situation | Message |
 |---|---|
-| `gh` absent du `PATH` et aucune variable de jeton | « owl a besoin de gh. Installe-le, puis lance `gh auth login`. » |
-| `gh` présent mais non connecté | « Non connecté à GitHub. Lance `gh auth login`. » |
-| Jeton refusé (HTTP 401) | « Jeton refusé par GitHub. Lance `gh auth login` pour le renouveler. » |
-| Droits insuffisants (HTTP 403 sans limite d'appels) | « Le jeton n'a pas les droits nécessaires. Vérifie la portée `repo`. » |
-| Fichier de réglages illisible ou invalide | « Réglages invalides dans <chemin> : <clé fautive>. » |
-| Liste de filtres vide | « Aucun filtre actif : la recherche ramènerait tout GitHub. » |
+| `gh` absent du `PATH` et aucune variable de jeton | « owl needs gh. Install it, then run `gh auth login`. » |
+| `gh` présent mais non connecté | « Not signed in to GitHub. Run `gh auth login`. » |
+| Jeton refusé (HTTP 401) | « Token refused by GitHub. Run `gh auth login` to renew it. » |
+| Droits insuffisants (HTTP 403 qui n'est pas une limite d'appels) | « The token lacks the required permissions. Check the `repo` scope. » |
+| Valeur de réglage invalide | « Invalid settings in \<chemin\>: \<clé fautive\>. » |
+| Fichier de réglages mal formé | « Invalid settings in \<chemin\>: invalid TOML syntax. » |
+| Fichier de réglages présent mais illisible | « Invalid settings in \<chemin\>: unreadable file. » |
+| Liste de filtres vide, ou dont tous les éléments sont blancs | « No active filter: the search would return all of GitHub. » |
+| Dossier personnel introuvable | « Cannot determine the configuration directory. » |
+
+Les trois cas de réglages sont distincts parce qu'ils n'apprennent pas la même
+chose : une valeur refusée peut nommer sa clé, un fichier syntaxiquement faux n'a
+aucune clé à nommer, et un fichier présent mais illisible — droits insuffisants,
+par exemple — n'est pas un fichier absent. Un fichier absent, lui, n'est pas une
+erreur : les valeurs par défaut s'appliquent.
 
 Ces messages sont écrits avant toute prise de contrôle du terminal, donc jamais
 avalés par l'écran alterné.
@@ -43,9 +52,22 @@ en `04-fusion.md`.
 
 Le champ `rateLimit` est lu à chaque requête réussie. Quand le solde restant tombe à
 zéro, `owl` suspend le rafraîchissement automatique jusqu'à l'heure de
-réinitialisation, et la barre d'état l'annonce : « limite d'appels atteinte,
-reprise à 14 h 32 ». La touche `r` est refusée pendant cette suspension, avec le même
+réinitialisation, et la barre d'état l'annonce : « rate limit reached, resuming at
+14:32 ». La touche `r` est refusée pendant cette suspension, avec le même
 message. `owl` ne réessaie jamais en boucle une requête refusée pour cause de limite.
+
+Quand GitHub refuse un solde de limite primaire épuisé sans que l'en-tête
+d'heure de réinitialisation soit exploitable, `owl` attend une minute avant de
+reprendre. L'attente est arbitraire, mais l'interdiction de réessayer en
+boucle, elle, ne l'est pas.
+
+Une limite secondaire — le garde-fou de GitHub contre les rafales, indépendant du
+compteur principal — n'empêche jamais le démarrage : elle est temporaire, et la
+confondre avec un manque de droits ferait s'arrêter `owl` sur un diagnostic faux.
+Elle se reconnaît à son en-tête de délai de reprise, au code 429, ou, faute des
+deux, à la phrase que GitHub écrit dans le corps de la réponse. Elle se traite
+comme la limite primaire : rafraîchissement suspendu, jamais de réessai en boucle,
+et une minute d'attente quand aucune heure de reprise n'est donnée.
 
 Aux réglages par défaut — une requête de liste par minute — la consommation reste
 très en dessous des quotas de GitHub. La suspension est un garde-fou, pas un cas
@@ -57,7 +79,7 @@ Le mode brut et l'écran alterné sont restaurés par un garde de portée, doubl
 crochet de panique. Un plantage laisse un terminal utilisable et affiche la trace
 d'erreur normalement.
 
-Un terminal trop étroit pour la liste affiche « Élargis le terminal » plutôt qu'un
+Un terminal trop étroit pour la liste affiche « Widen the terminal » plutôt qu'un
 affichage tronqué au hasard.
 
 ## Tests
@@ -91,7 +113,8 @@ vraiment, y compris ses formes surprenantes.
 ### `github` — client HTTP
 
 Testé contre un serveur local qui rejoue des réponses : succès, tableau `errors`,
-401, 403 avec limite d'appels, corps tronqué. On vérifie que chaque cas donne la
+401, 403 de droits insuffisants, 403 et 429 de limite d'appels sous leurs
+trois formes, corps tronqué. On vérifie que chaque cas donne la
 bonne variante d'erreur.
 
 ### `ui` — pas de test automatique

@@ -10,6 +10,18 @@ specs s'appuient sur lui.
 `owl` est un binaire unique, interactif. Lancé sans argument, il prend le contrôle du
 terminal, affiche un écran et le rend à la sortie. Il n'y a pas de sous-commandes.
 
+## Langue
+
+Deux langues, chacune à sa place :
+
+- **Anglais** : tout le code — identifiants, variables, noms de tests — et tout ce
+  que l'utilisateur lit, messages d'erreur du démarrage compris.
+- **Français** : les commentaires, les documents de `docs/`, et les messages de
+  commit.
+
+Les messages d'erreur venant de GitHub sont affichés tels quels : ils sont déjà en
+anglais, et les reformuler ferait perdre ce qu'ils disent.
+
 ## Technologie
 
 Rust, édition 2021.
@@ -42,7 +54,9 @@ src/
     dto.rs       types de réponse brute, mappés vers model
   model.rs       types métier
   filter.rs      filtres et construction de la requête de recherche
-  app.rs         état de l'application, réception des événements
+  app/
+    mod.rs       état de l'application, réception des événements
+    render.rs    composition de l'affichage : pictogrammes, colonnes, messages
   ui/
     mod.rs       aiguillage de dessin selon la vue
     list.rs      dessin de la liste
@@ -111,6 +125,9 @@ refresh_interval = 60
 
 # Méthode de fusion présélectionnée quand le dépôt en autorise plusieurs.
 # Valeurs acceptées : "squash", "rebase", "merge".
+# config::MergeMethod est une réexportation de model::MergeMethod : le type
+# appartient au modèle, `github` en a besoin pour la mutation et n'a pas le
+# droit de dépendre des réglages.
 preferred_merge_method = "squash"
 
 # Nombre maximal de PR ramenées par requête (1 à 100).

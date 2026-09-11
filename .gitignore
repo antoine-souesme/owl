@@ -1,0 +1,18 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# macOS
+.DS_Store
+
+# Éditeurs
+.idea/
+*.swp
+
+# Réglages locaux de owl, jamais versionnés
+config.toml
+
+# Agentic coding
+.superpowers
+docs/suivi/TODO.md

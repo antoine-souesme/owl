@@ -40,62 +40,149 @@ cette logique produirait forcément des désaccords.
 Une fenêtre centrée, par-dessus la liste, qui capte tout le clavier.
 
 ```
-┌─ Fusionner ────────────────────────────────┐
-│ org/dépôt #142                             │
-│ Corrige la lecture des réglages            │
-│                                            │
-│ Méthode :                                  │
-│   > Écraser les commits (squash)           │
-│     Rebaser (rebase)                       │
-│                                            │
-│ Entrée pour confirmer · Échap pour annuler │
-└────────────────────────────────────────────┘
+┌─ Merge ────────────────────────────┐
+│ #142 Fix settings loading          │
+│ develop ← fix/settings             │
+│                                    │
+│ Method:                            │
+│     Create a merge commit          │
+│   → Squash and merge               │
+│     Rebase and merge               │
+│                                    │
+│ Enter to confirm · Esc to cancel   │
+└────────────────────────────────────┘
 ```
 
-Seules les méthodes autorisées par le dépôt sont listées. La sélection initiale est
-`preferred_merge_method` des réglages si cette méthode est autorisée, sinon la
-première de la liste dans l'ordre écrasement, rebasage, commit de fusion.
+Les trois méthodes sont toujours listées, dans l'ordre commit de fusion,
+écrasement, rebasage — c'est `MERGE_METHODS` qui porte cet ordre, et nulle part
+ailleurs qu'il est recalculé. Celles que le dépôt refuse restent visibles, grisées :
+la fenêtre dit ainsi aussi ce qui n'est pas possible, plutôt que de le taire.
+`RepoMergeRules::allowed()` ne sert plus qu'à savoir lesquelles sont autorisées.
 
-Quand une seule méthode est autorisée, la liste est remplacée par une ligne
-« Méthode : écraser les commits (imposé par le dépôt) », et la fenêtre ne demande plus
-que la confirmation.
+La sélection initiale est la dernière méthode confirmée dans la session si le dépôt
+l'autorise, sinon `preferred_merge_method` des réglages si elle est autorisée, sinon
+la première méthode autorisée en partant du haut. Cette mémoire vit dans
+`App::last_used_method` et ne survit pas à la session : `owl` ne réécrit jamais les
+réglages.
 
-`Entrée` confirme, `Échap` annule, les flèches haut et bas changent de méthode. Aucune
-autre touche n'agit.
+Les deux premiers rangs disent de quoi il s'agit et où ça va : le numéro puis le
+titre, et en dessous la branche visée, une flèche vers la gauche, la branche
+d'origine. Les deux noms de branche viennent du résumé de la liste, jamais d'une
+requête de détail : la fenêtre s'ouvre aussi bien depuis la liste que depuis le
+détail.
+
+La fenêtre reprend le code couleur de la vue liste : le numéro et la flèche en
+gris, le titre en couleur par défaut, les deux branches du bleu de la colonne de la
+branche visée, les méthodes
+refusées du même gris que les colonnes secondaires de la liste, et le message
+d'erreur de GitHub en rouge. Comme dans la liste, la ligne sélectionnée n'est pas
+surlignée : le marqueur suffit, et c'est le même — `SELECTION_MARKER`, défini une
+seule fois.
+
+`Entrée` confirme, `Échap` annule, les flèches haut et bas changent de méthode sans
+boucler et sans jamais s'arrêter sur une méthode que le dépôt refuse. Sur un dépôt
+qui n'en autorise qu'une, elles ne déplacent donc rien. Aucune autre touche n'agit — sauf `Ctrl-C`, qui quitte `owl` même fenêtre
+ouverte : le mode brut l'a désarmée, et c'est à `owl` de l'honorer, sans quoi la
+seule sortie serait de tuer le terminal. `q`, lui, ne quitte pas tant que la fenêtre
+est ouverte. Tant qu'elle l'est, la barre d'état affiche
+« ↑↓ choose · Enter confirm · Esc cancel » à la place de l'aide clavier
+habituelle.
 
 ```rust
+const MERGE_METHODS: [MergeMethod; 3] = [MergeMethod::Merge, MergeMethod::Squash, MergeMethod::Rebase];
+
+struct MergeChoice {
+    method: MergeMethod,
+    allowed: bool,   // autorisée par le dépôt
+}
+
 struct MergeDialog {
     key: PrKey,
     title: String,
-    methods: Vec<MergeMethod>,   // uniquement celles autorisées
+    base_ref: String,            // branche visée
+    head_ref: String,            // branche d'origine
+    methods: Vec<MergeChoice>,   // les trois, dans l'ordre de MERGE_METHODS
     selected: usize,
     state: MergeDialogState,
+}
+
+impl MergeDialog {
+    fn method(&self) -> Option<MergeMethod>;   // méthode sous le curseur, si elle est autorisée
 }
 
 enum MergeDialogState { Choosing, Submitting, Failed(String) }
 ```
 
+`App` porte `merge: Option<MergeDialog>` et `notice: Option<String>`. Tant que
+`merge` contient une fenêtre, elle capte tout le clavier et le rafraîchissement
+automatique ne touche plus à la liste. `notice` porte les motifs de refus de `m`
+et l'annonce d'une fusion réussie ; il s'affiche dans la barre d'état au même rang
+que l'erreur de GitHub — sinon le rafraîchissement qui suit une fusion réussie
+effacerait aussitôt son annonce — et s'efface au premier appui sur une touche, une
+fois la fenêtre fermée.
+
+Libellés exacts des méthodes dans la liste : « Create a merge commit », « Squash and
+merge », « Rebase and merge ». L'état `Submitting` utilise la forme courte, sans
+capitale : « create a merge commit », « squash and merge », « rebase and merge ».
+
+`app` expose la fenêtre sous la forme d'un `MergeRender { title, lines }`, où chaque
+ligne est une suite de morceaux teintés comme une ligne de liste : un titre de cadre
+et des lignes déjà écrites, marqueur de sélection et couleurs comprises. Toute la
+composition — le marqueur, les libellés, les tons, le message d'attente — est
+décidée dans `app/render.rs`. `merge_render` reçoit la
+largeur disponible, exactement comme `status_line(width)`, et replie lui-même
+chaque ligne contre une largeur de contenu bornée — sur les limites de mots quand
+c'est possible, sans jamais perdre de contenu — pour qu'un message de GitHub trop
+long pour tenir sur une ligne s'affiche entier, replié, plutôt que tronqué.
+`ui/merge.rs` ne calcule que la taille et le centrage des lignes déjà repliées,
+efface le fond et dessine le cadre.
+
 ## Déroulement de la fusion
 
-À la confirmation, la fenêtre passe en `Submitting` et affiche « fusion en cours »
-sans se fermer — fermer la fenêtre pendant l'appel donnerait l'impression que c'est
-fini.
+À la confirmation, la fenêtre passe en `Submitting` et affiche « Merging… » sans se
+fermer — fermer la fenêtre pendant l'appel donnerait l'impression
+que c'est fini. Aucune touche n'agit tant qu'elle est dans cet état, `Échap`
+comprise.
 
 La mutation a besoin de l'identifiant GraphQL de la PR, absent de la requête de
-liste. Si le détail de la PR est en cache, l'identifiant y est. Sinon, `owl` le
-récupère d'abord par la requête de détail, puis enchaîne la mutation. Cet
-enchaînement est invisible pour l'utilisateur, hormis un temps d'attente un peu plus
-long.
+liste. C'est `github::merge_pull_request` qui fait l'enchaînement « détail puis
+mutation » : il reçoit un `node_id: Option<String>` et, quand il vaut `None`,
+récupère d'abord le détail de la PR pour en prendre l'identifiant, avant
+d'enchaîner la mutation. Cet enchaînement est invisible pour l'utilisateur,
+hormis un temps d'attente un peu plus long. Le détail ainsi récupéré n'entre pas
+dans le cache de `app` : le rafraîchissement qui suit une fusion réussie le
+rendrait aussitôt périmé.
 
-En cas de succès : la fenêtre se ferme, la barre d'état affiche
-« org/dépôt #142 fusionnée », et une requête de liste est lancée immédiatement. La PR
-disparaît de la liste au rafraîchissement, et la sélection suit la règle de
-`03-affichage-et-navigation.md`.
+Si la pull request visée a disparu de la liste et du cache entre l'ouverture de
+la fenêtre et la confirmation — une réponse de liste déjà en vol au moment de
+l'ouverture suffit —, il n'y a plus rien à fusionner : la fenêtre se ferme et la
+notice affiche « Pull request not found. ». Rester silencieux donnerait
+l'impression que `Entrée` ne fait rien.
+
+Aucun compteur de génération ne protège cet appel : une seule fusion peut être en
+vol, la fenêtre bloquant le clavier pendant l'attente. Un `MergeFinished` dont la
+clé ne correspond pas à la fenêtre ouverte est simplement ignoré.
+
+En cas de succès : la fenêtre se ferme, la notice affiche « org/depot #142 merged »,
+et la pull request quitte la liste sur-le-champ, sans attendre la réponse — l'index
+de recherche de GitHub met un instant à l'oublier, et la revoir après une fusion
+réussie ferait douter du résultat. Une requête de liste est tout de même lancée
+immédiatement : elle porte le solde d'appels et les mises à jour des autres PR. La
+sélection suit la règle de `03-affichage-et-navigation.md`, et reste donc à la même
+place à l'écran.
+
+La pull request est aussi retenue comme fusionnée pour le reste de la session, et
+retirée de toutes les listes qui arrivent ensuite. L'index de recherche de GitHub
+met quelques secondes à l'oublier : sans cela elle disparaît, revient au
+rafraîchissement suivant, puis repart — ce clignotement ferait douter de la fusion.
+Une pull request fusionnée ne redevient jamais ouverte, la retenir ne cache donc
+rien d'utile.
 
 En cas d'échec : la fenêtre passe en `Failed` et affiche le message d'erreur de
-GitHub tel quel. C'est délibéré — « Base branch was modified » ou « At least 1
-approving review is required » disent exactement quoi faire, là où un message maison
-brouillerait la cause. `Échap` ferme, `Entrée` réessaie avec la même méthode.
+GitHub tel quel, suivi de « Enter to retry · Esc to close ». C'est
+délibéré — « Base branch was modified » ou « At least 1 approving review is
+required » disent exactement quoi faire, là où un message maison brouillerait la
+cause. `Échap` ferme, `Entrée` réessaie avec la même méthode.
 
 ## Suppression de la branche
 
@@ -112,15 +199,26 @@ fusion, une confirmation.
 
 ## Critères de réussite
 
-- Un dépôt n'autorisant que l'écrasement ne propose jamais le rebasage ni le commit
-  de fusion.
-- Un dépôt qui en autorise trois les propose toutes, avec la méthode préférée
+- Le premier rang de la fenêtre porte le numéro puis le titre, le second la branche
+  visée, une flèche vers la gauche et la branche d'origine.
+- La fenêtre liste toujours les trois méthodes, dans l'ordre commit de fusion,
+  écrasement, rebasage.
+- Un dépôt n'autorisant que l'écrasement affiche le commit de fusion et le rebasage
+  en gris, et le curseur ne peut pas les atteindre.
+- Un dépôt qui autorise les trois les propose toutes, avec la méthode préférée
   présélectionnée.
 - Une méthode préférée non autorisée par le dépôt ne bloque rien : la première
-  méthode autorisée est présélectionnée.
+  méthode autorisée en partant du haut est présélectionnée.
+- Après une fusion réussie, la fenêtre suivante s'ouvre sur la méthode qui vient de
+  servir, si le dépôt l'autorise, et cela sans rien écrire sur le disque.
 - `m` sur une PR en brouillon, en conflit, ou sur un dépôt sans méthode autorisée
   n'ouvre pas la fenêtre et affiche le motif.
 - `Échap` en état `Choosing` ferme la fenêtre sans aucun appel.
-- Une fusion réussie déclenche un rafraîchissement de la liste.
+- Une fusion réussie retire la PR de la liste sur-le-champ et déclenche un
+  rafraîchissement, en laissant les autres PR et la place de la sélection intactes.
+- Une liste qui renvoie encore une PR fusionnée pendant la session ne la fait pas
+  réapparaître.
 - Une fusion échouée laisse la fenêtre ouverte avec le message de GitHub, et la PR
   reste dans la liste.
+- Confirmer sur une PR disparue entre-temps ferme la fenêtre, n'émet aucun appel et
+  affiche « Pull request not found. ».

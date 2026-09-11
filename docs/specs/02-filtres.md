@@ -91,6 +91,30 @@ Il n'y a pas de changement de filtre depuis l'écran, ni de touche pour basculer
 ouverte : la structure `Filter` et `build_query` suffiront à l'ajouter plus tard, en
 ne touchant que `app` et `ui`.
 
+## Note d'implémentation
+
+`config::Config` expose `filters: Vec<String>` : les réglages portent les filtres
+sous forme de chaînes, et c'est `app` qui les traduit en variantes de `Filter`, une
+seule fois, à sa construction.
+
+`app` assemble la requête avec `build_query` et la transmet dans
+`Command::Fetch { generation, query, page_size }`. Le client GitHub reçoit donc une
+chaîne toute faite et n'assemble plus rien : l'ancienne jointure `github::search_query`
+a disparu, et la syntaxe de recherche ne vit plus qu'ici.
+
+Quatre précisions que le tableau des correspondances ne dit pas :
+
+- `Filter::parse` accepte un libellé avec ou sans guillemets — `label:"bug"` comme
+  `label:bug` donnent `Label("bug")`, qui se réécrit `label:"bug"`.
+- Un préfixe sans valeur — `org:`, `repo:`, `label:` seuls — n'est pas reconnu et
+  part en `Raw`, transmis tel quel.
+- `build_query` écarte les fragments vides, et n'enlève aucun doublon : `is:pr`
+  écrit dans les réglages apparaît deux fois dans la requête, ce que GitHub accepte.
+- `Filter::parse` retire les espaces en début et en fin de chaîne avant toute
+  reconnaissance : un `Raw` issu des réglages perd donc lui aussi ses espaces de
+  bord — `"  involves:@me  "` donne `Raw("involves:@me")`, malgré le « telle
+  quelle » du tableau ci-dessus.
+
 ## Critères de réussite
 
 - Une liste de filtres donnée produit exactement la chaîne attendue, `is:pr` en tête

@@ -1,0 +1,262 @@
+//! Types métier. Ne dépend ni du réseau ni du terminal.
+//!
+//! Ces types sont ceux de `docs/specs/01-modele-et-data.md`. Ils ne
+//! connaissent pas le vocabulaire de GitHub : la traduction est faite par
+//! `github::dto`, seul endroit qui voit passer un `SUCCESS` ou un
+//! `nameWithOwner`.
+
+use chrono::{DateTime, Utc};
+
+/// Auteur affiché quand GitHub n'en renvoie aucun : le compte a été supprimé.
+pub const UNKNOWN_AUTHOR: &str = "inconnu";
+
+/// Identité d'une pull request, stable et utilisable comme clé.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PrKey {
+    /// Dépôt au format `org/dépôt`.
+    pub repo: String,
+    pub number: u32,
+}
+
+impl PrKey {
+    /// Propriétaire du dépôt, partie gauche de `org/dépôt`.
+    pub fn owner(&self) -> &str {
+        self.repo.split('/').next().unwrap_or(&self.repo)
+    }
+
+    /// Nom du dépôt, partie droite de `org/dépôt`.
+    pub fn name(&self) -> &str {
+        self.repo.split('/').nth(1).unwrap_or("")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChecksState {
+    Success,
+    Failure,
+    Pending,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewState {
+    Approved,
+    ChangesRequested,
+    ReviewRequired,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeableState {
+    Mergeable,
+    Conflicting,
+    /// GitHub calcule ce champ paresseusement : « on ne sait pas encore »,
+    /// et non un blocage.
+    Unknown,
+}
+
+/// Verdict de synthèse de GitHub sur la fusion, repris tel quel : `owl` ne
+/// recalcule pas les protections de branche, il transmet ce que GitHub dit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeState {
+    /// Plus rien ne bloque : la pull request peut être fusionnée.
+    Clean,
+    /// Quelque chose bloque — brouillon, conflit, vérification en cours,
+    /// relecture manquante. Le motif exact reste l'affaire de GitHub.
+    Blocked,
+    /// Verdict pas encore calculé. Comme `MergeableState::Unknown`, c'est un
+    /// « on ne sait pas encore », et surtout pas un blocage.
+    Unknown,
+}
+
+/// Méthodes de fusion autorisées par le dépôt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepoMergeRules {
+    pub squash: bool,
+    pub merge: bool,
+    pub rebase: bool,
+    pub delete_branch_on_merge: bool,
+}
+
+/// Méthode de fusion. Le vocabulaire de GitHub — `SQUASH`, `REBASE`, `MERGE` —
+/// reste chez `github` ; ici, seule la notion métier.
+///
+/// Ce type vit dans `model` et non dans `config` parce que `github` en a
+/// besoin pour la mutation : le sens des dépendances interdit à `github` de
+/// connaître les réglages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeMethod {
+    Squash,
+    Rebase,
+    Merge,
+}
+
+impl RepoMergeRules {
+    /// Méthodes autorisées par le dépôt. L'ordre d'affichage n'est pas décidé
+    /// ici mais par `app::MERGE_METHODS` : cette liste ne sert qu'à savoir
+    /// lesquelles sont permises, et si le dépôt en permet au moins une.
+    pub fn allowed(&self) -> Vec<MergeMethod> {
+        let mut methods = Vec::new();
+        if self.merge {
+            methods.push(MergeMethod::Merge);
+        }
+        if self.squash {
+            methods.push(MergeMethod::Squash);
+        }
+        if self.rebase {
+            methods.push(MergeMethod::Rebase);
+        }
+        methods
+    }
+}
+
+/// Ce qu'il faut pour dessiner une ligne de liste.
+///
+/// `repo_rules` est porté ici et non par une structure de dépôt séparée :
+/// l'information arrive dans la même requête que la liste, et la fenêtre de
+/// fusion en a besoin sans appel supplémentaire.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrSummary {
+    pub key: PrKey,
+    pub title: String,
+    pub author: String,
+    pub url: String,
+    pub is_draft: bool,
+    pub checks: ChecksState,
+    pub review: ReviewState,
+    pub mergeable: MergeableState,
+    /// Verdict de fusion de GitHub. Il sert à prévenir quand une pull request
+    /// devient fusionnable, et n'est pas affiché.
+    pub merge_state: MergeState,
+    /// Branche visée par la fusion. Elle vient avec la liste : la colonne de
+    /// la vue liste l'affiche sans attendre la requête de détail.
+    pub base_ref: String,
+    /// Branche d'origine de la fusion. Elle vient aussi avec la liste : la
+    /// fenêtre de fusion l'affiche sans attendre la requête de détail.
+    pub head_ref: String,
+    pub updated_at: DateTime<Utc>,
+    pub repo_rules: RepoMergeRules,
+}
+
+/// Solde d'appels restant, lu à chaque requête réussie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateLimit {
+    pub remaining: u32,
+    pub reset_at: DateTime<Utc>,
+}
+
+/// Résultat d'une requête de liste : les pull requests et le solde d'appels
+/// lu au passage. Le solde voyage avec les données parce que la spec demande
+/// qu'il soit conservé dans l'état à chaque requête.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListPage {
+    pub pull_requests: Vec<PrSummary>,
+    pub rate_limit: Option<RateLimit>,
+}
+
+/// Ce qu'il faut en plus pour dessiner la vue détail.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrDetail {
+    pub summary: PrSummary,
+    /// Identifiant GraphQL, nécessaire à la fusion.
+    pub node_id: String,
+    pub body: String,
+    pub checks: Vec<CheckRun>,
+    pub reviews: Vec<Review>,
+    pub comments: Vec<Comment>,
+    pub files: Vec<ChangedFile>,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckRun {
+    pub name: String,
+    pub state: ChecksState,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Review {
+    pub author: String,
+    pub state: ReviewState,
+    pub body: String,
+    pub submitted_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Comment {
+    pub author: String,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChangedFile {
+    pub path: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_key_splits_the_owner_and_the_repo() {
+        let key = PrKey {
+            repo: "moi/owl".to_string(),
+            number: 42,
+        };
+        assert_eq!(key.owner(), "moi");
+        assert_eq!(key.name(), "owl");
+    }
+
+    #[test]
+    fn a_key_without_a_slash_does_not_panic() {
+        let key = PrKey {
+            repo: "owl".to_string(),
+            number: 1,
+        };
+        assert_eq!(key.owner(), "owl");
+        assert_eq!(key.name(), "");
+    }
+
+    /// Règles où tout est refusé, base des cas ci-dessous.
+    fn none_allowed() -> RepoMergeRules {
+        RepoMergeRules {
+            squash: false,
+            merge: false,
+            rebase: false,
+            delete_branch_on_merge: false,
+        }
+    }
+
+    #[test]
+    fn a_repo_with_no_method_allows_none() {
+        assert!(none_allowed().allowed().is_empty());
+    }
+
+    #[test]
+    fn a_repo_allowing_only_squash_returns_only_squash() {
+        let rules = RepoMergeRules {
+            squash: true,
+            ..none_allowed()
+        };
+        assert_eq!(rules.allowed(), vec![MergeMethod::Squash]);
+    }
+
+    #[test]
+    fn the_methods_come_in_the_order_merge_squash_rebase() {
+        let rules = RepoMergeRules {
+            squash: true,
+            merge: true,
+            rebase: true,
+            delete_branch_on_merge: true,
+        };
+        assert_eq!(
+            rules.allowed(),
+            vec![MergeMethod::Merge, MergeMethod::Squash, MergeMethod::Rebase]
+        );
+    }
+}
