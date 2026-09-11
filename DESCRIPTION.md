@@ -35,6 +35,10 @@ seulement confirmation.
 La liste se rafraîchit toute seule chaque minute, et la touche « r » force un
 rafraîchissement.
 
+Quand une PR devient fusionnable — GitHub dit que plus rien ne bloque —, `owl`
+envoie une notification du système. Une par PR, et seulement au moment où elle le
+devient : ce qui était déjà prêt au lancement ne déclenche rien.
+
 ## Ce que owl ne fait pas
 
 `owl` ne crée pas de pull request, ne pousse pas de code, ne rédige pas de

@@ -13,6 +13,7 @@ struct App {
     selected: usize,
     selected_key: Option<PrKey>,   // sert à retrouver la sélection après rafraîchissement
     details: HashMap<PrKey, CachedDetail>,   // cache de la session
+    announced: Option<HashSet<PrKey>>,       // PR déjà annoncées comme fusionnables
     loading: Loading,
     error: Option<String>,
     rate_limit: Option<RateLimit>,
@@ -56,6 +57,7 @@ enum Command {
     FetchList { generation: Generation, query: String, page_size: u16 },
     FetchDetail { generation: Generation, summary: PrSummary },
     OpenInBrowser { url: String },
+    Notify { title: String, body: String },
     Quit,
 }
 
@@ -299,6 +301,45 @@ détail périmé jusqu'à un appui sur `r` dans la vue détail. C'est un comprom
 assumé : il évite des requêtes inutiles, et le détail porte l'heure de son
 chargement.
 
+## Notification d'une pull request fusionnable
+
+Quand une pull request devient fusionnable, `owl` le fait savoir hors du terminal :
+une notification du système, une par pull request, titrée « Ready to merge » et
+portant le dépôt, le numéro et le titre.
+
+Le verdict est celui de GitHub, `MergeState::Clean`. `owl` ne rejoue pas les règles
+du dépôt : il transmet ce que GitHub dit, comme partout ailleurs.
+
+`app` retient dans `announced` les pull requests déjà annoncées, et compare à chaque
+liste reçue :
+
+| Verdict reçu | Déjà annoncée | Effet |
+|---|---|---|
+| `Clean` | non | notification, et la PR entre dans `announced` |
+| `Clean` | oui | rien |
+| `Blocked` | — | la PR sort de `announced` : elle sera annoncée de nouveau |
+| `Unknown` | — | rien, dans les deux sens |
+
+`Unknown` ne fait ni entrer ni sortir de `announced`. GitHub calcule ce verdict
+paresseusement : le traiter comme un blocage ferait réannoncer une pull request
+prête au calcul suivant.
+
+`announced` vaut `None` tant qu'aucune liste n'est arrivée. La première liste ne
+fait que noter l'état de départ, sans rien annoncer : lancer `owl` ne doit pas
+déclencher une rafale de notifications pour des pull requests prêtes depuis la
+veille.
+
+Une pull request absente de la liste reçue sort de `announced`. Fusionnée, fermée ou
+écartée par un filtre, elle a quitté l'écran ; si elle revient et qu'elle est prête,
+c'est une nouvelle.
+
+L'envoi n'est pas l'affaire de `app`, qui ne fait aucun effet de bord : il émet
+`Command::Notify`, et la boucle principale appelle `osascript`, présent d'origine
+sur macOS. La notification est accompagnée d'un son du système, « Glass » :
+sans lui, la bannière passe en silence, et une PR prête mérite qu'on lève les
+yeux. Un échec d'envoi reste silencieux : une notification perdue n'abîme pas
+l'écran et n'arrête pas `owl`.
+
 ## Sortie du terminal
 
 Le mode brut et l'écran alterné sont restaurés à la sortie, y compris en cas de
@@ -318,6 +359,16 @@ Tous vérifiables sans terminal, en envoyant des événements à `App` :
 - Après un rafraîchissement où la PR sélectionnée a disparu, la sélection reste dans
   les bornes de la nouvelle liste.
 - Un résultat de liste portant une génération périmée est ignoré.
+- La toute première liste n'émet aucune notification, même si des pull requests y
+  sont déjà fusionnables.
+- Une pull request qui passe de `Blocked` à `Clean` émet une `Notify` portant son
+  dépôt, son numéro et son titre.
+- Une pull request `Clean` de deux listes de suite n'est annoncée qu'une fois.
+- Une pull request `Clean` dont le verdict suivant est `Unknown` n'est pas annoncée
+  de nouveau quand `Clean` revient.
+- Une pull request redevenue `Blocked` est annoncée de nouveau quand elle redevient
+  `Clean`.
+- Une pull request sortie de la liste puis revenue `Clean` est annoncée de nouveau.
 - Un `Tick` reçu pendant un chargement de liste n'émet pas de seconde requête.
 - Un `Resize` n'émet aucune commande, ne déplace pas la sélection, ne change pas de
   vue et n'efface pas le message en cours.

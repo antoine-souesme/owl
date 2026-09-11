@@ -55,6 +55,20 @@ pub enum MergeableState {
     Unknown,
 }
 
+/// Verdict de synthèse de GitHub sur la fusion, repris tel quel : `owl` ne
+/// recalcule pas les protections de branche, il transmet ce que GitHub dit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeState {
+    /// Plus rien ne bloque : la pull request peut être fusionnée.
+    Clean,
+    /// Quelque chose bloque — brouillon, conflit, vérification en cours,
+    /// relecture manquante. Le motif exact reste l'affaire de GitHub.
+    Blocked,
+    /// Verdict pas encore calculé. Comme `MergeableState::Unknown`, c'est un
+    /// « on ne sait pas encore », et surtout pas un blocage.
+    Unknown,
+}
+
 /// Méthodes de fusion autorisées par le dépôt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RepoMergeRules {
@@ -111,6 +125,9 @@ pub struct PrSummary {
     pub checks: ChecksState,
     pub review: ReviewState,
     pub mergeable: MergeableState,
+    /// Verdict de fusion de GitHub. Il sert à prévenir quand une pull request
+    /// devient fusionnable, et n'est pas affiché.
+    pub merge_state: MergeState,
     /// Branche visée par la fusion. Elle vient avec la liste : la colonne de
     /// la vue liste l'affiche sans attendre la requête de détail.
     pub base_ref: String,
