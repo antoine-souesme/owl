@@ -171,6 +171,13 @@ immédiatement : elle porte le solde d'appels et les mises à jour des autres PR
 sélection suit la règle de `03-affichage-et-navigation.md`, et reste donc à la même
 place à l'écran.
 
+La pull request est aussi retenue comme fusionnée pour le reste de la session, et
+retirée de toutes les listes qui arrivent ensuite. L'index de recherche de GitHub
+met quelques secondes à l'oublier : sans cela elle disparaît, revient au
+rafraîchissement suivant, puis repart — ce clignotement ferait douter de la fusion.
+Une pull request fusionnée ne redevient jamais ouverte, la retenir ne cache donc
+rien d'utile.
+
 En cas d'échec : la fenêtre passe en `Failed` et affiche le message d'erreur de
 GitHub tel quel, suivi de « Enter to retry · Esc to close ». C'est
 délibéré — « Base branch was modified » ou « At least 1 approving review is
@@ -209,6 +216,8 @@ fusion, une confirmation.
 - `Échap` en état `Choosing` ferme la fenêtre sans aucun appel.
 - Une fusion réussie retire la PR de la liste sur-le-champ et déclenche un
   rafraîchissement, en laissant les autres PR et la place de la sélection intactes.
+- Une liste qui renvoie encore une PR fusionnée pendant la session ne la fait pas
+  réapparaître.
 - Une fusion échouée laisse la fenêtre ouverte avec le message de GitHub, et la PR
   reste dans la liste.
 - Confirmer sur une PR disparue entre-temps ferme la fenêtre, n'émet aucun appel et

@@ -140,7 +140,9 @@ d'état devient « ↑↓ choose · Enter confirm · Esc cancel ».
 
 ## Vue liste
 
-Le cadre porte le titre « Owl - Monitoring pull requests ».
+Le cadre porte le titre « Owl - <version> », où `<version>` est la version du
+programme, celle déclarée dans `Cargo.toml`. Elle est lue à la compilation : rien
+n'a à la tenir à jour ailleurs.
 
 Une ligne par pull request, sur une seule ligne de terminal, dans cet ordre :
 pictogrammes, dépôt, numéro, âge, branche cible, titre.
@@ -380,3 +382,4 @@ Tous vérifiables sans terminal, en envoyant des événements à `App` :
   dépôt ni le numéro.
 - La vue détail encadre son en-tête et titre ses sections.
 - Aucun texte affiché ne porte de tiret cadratin.
+- Le titre de la liste porte la version du programme.
