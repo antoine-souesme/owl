@@ -1,10 +1,7 @@
 # owl
 
-<!-- VIDÉO — remplacer par la démonstration -->
 <p align="center">
-  <a href="https://example.com/owl-demo">
-    <img src="docs/media/demo.gif" alt="Démonstration de owl" width="800">
-  </a>
+  <img src="docs/media/demo.gif" alt="Démonstration de owl" width="800">
 </p>
 
 Un outil en ligne de commande qui affiche les pull requests de votre compte GitHub
