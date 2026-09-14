@@ -1,66 +1,64 @@
 # owl
 
 <p align="center">
-  <img src="docs/media/demo.gif" alt="Démonstration de owl" width="800">
+  <img src="docs/media/demo.gif" alt="owl demo" width="800">
 </p>
 
-Un outil en ligne de commande qui affiche les pull requests de votre compte GitHub
-dans le terminal, et qui permet de les fusionner en respectant les règles du dépôt.
+A command-line tool that lists your GitHub pull requests in the terminal and merges
+them according to each repository's rules.
 
-## Pourquoi
+## Why
 
-Suivre ses pull requests demande d'ouvrir un navigateur ou d'enchaîner des commandes
-`gh` dépôt par dépôt. `owl` regroupe tout dans un seul écran : la liste des PR, leur
-état de vérification, leur état de relecture, et la fusion sans quitter le terminal.
+Keeping track of your pull requests means opening a browser or running `gh` command
+after command, repository by repository. `owl` puts everything on one screen: the
+list of PRs, their check status, their review status, and merging without leaving
+the terminal.
 
-## Prérequis
+## Requirements
 
-- Rust (édition 2021)
-- `gh` installé et connecté (`gh auth login`)
+- Rust (2021 edition)
+- `gh` installed and logged in (`gh auth login`)
 
-## Installation
+## Install
 
 ```bash
 cargo install --path .
 ```
 
-Ou en local, sans installer :
+Or run it locally, without installing:
 
 ```bash
 cargo run
 ```
 
-## Utilisation
+## Usage
 
-On lance `owl`, sans argument. La liste des pull requests s'affiche : dépôt, numéro,
-âge de la dernière mise à jour, branche visée, titre, état de la CI et des
-relectures. Les brouillons et les conflits sont signalés.
+Run `owl` with no arguments. The list of pull requests appears: repository, number,
+age of the last update, target branch, title, CI status and review status. Drafts
+and conflicts are flagged.
 
-L'interface est en anglais.
+### Keys
 
-### Raccourcis
-
-| Touche | Vue liste | Vue détail |
+| Key | List view | Detail view |
 |---|---|---|
-| Flèche haut, `k` | sélection précédente | défilement vers le haut |
-| Flèche bas, `j` | sélection suivante | défilement vers le bas |
-| Flèche droite, `Entrée` | ouvre le détail | — |
-| Flèche gauche, `Échap` | — | revient à la liste |
-| `m` | ouvre la fenêtre de fusion | ouvre la fenêtre de fusion |
-| `r` | rafraîchit | rafraîchit |
-| `o` | ouvre la PR dans le navigateur | idem |
-| `q`, `Ctrl+C` | quitte | quitte |
+| Up arrow, `k` | previous selection | scroll up |
+| Down arrow, `j` | next selection | scroll down |
+| Right arrow, `Enter` | open the detail | — |
+| Left arrow, `Esc` | — | back to the list |
+| `m` | open the merge dialog | open the merge dialog |
+| `r` | refresh | refresh |
+| `o` | open the PR in the browser | same |
+| `q`, `Ctrl+C` | quit | quit |
 
-La fusion ne propose que les méthodes réellement autorisées par le dépôt. S'il n'y
-en a qu'une, `owl` demande seulement confirmation.
+The merge dialog only offers the methods the repository actually allows. If there is
+only one, `owl` just asks for confirmation.
 
-La liste se rafraîchit toute seule chaque minute. Quand une PR devient fusionnable,
-une notification du système est envoyée — une seule fois, et seulement au moment du
-changement.
+The list refreshes on its own every minute. When a PR becomes mergeable, a system
+notification is sent — once per PR, and only at the moment it changes.
 
-## Réglages
+## Configuration
 
-Fichier optionnel, dans `~/.config/owl/config.toml` :
+Optional file, at `~/.config/owl/config.toml`:
 
 ```toml
 filters = ["author:@me", "is:open"]
@@ -69,17 +67,17 @@ preferred_merge_method = "squash"
 page_size = 50
 ```
 
-## Authentification
+## Authentication
 
-Le jeton est cherché dans cet ordre : `OWL_TOKEN`, `GITHUB_TOKEN`, puis la sortie de
-`gh auth token`. Il n'est jamais écrit dans un fichier, ni journalisé, ni affiché.
+The token is looked up in this order: `OWL_TOKEN`, `GITHUB_TOKEN`, then the output of
+`gh auth token`. It is never written to a file, logged, or displayed.
 
-## Ce que owl ne fait pas
+## What owl does not do
 
-Créer une pull request, pousser du code, rédiger des commentaires, gérer les issues,
-afficher un diff ligne à ligne, fusionner plusieurs PR d'un coup.
+Create a pull request, push code, write comments, manage issues, show a line-by-line
+diff, or merge several PRs at once.
 
-## Développement
+## Development
 
 ```bash
 cargo build
@@ -88,5 +86,5 @@ cargo clippy -- -D warnings
 cargo fmt --check
 ```
 
-Le résumé du projet est dans `DESCRIPTION.md`, les spécifications dans
-`docs/specs/`.
+The project summary is in `DESCRIPTION.md`, the specifications in `docs/specs/`
+(both in French).
