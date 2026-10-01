@@ -35,6 +35,35 @@ Les protections de branche sont la seule autorité sur ce point, et c'est GitHub
 les applique : `owl` transmet la demande et rapporte le refus s'il y en a un. Dupliquer
 cette logique produirait forcément des désaccords.
 
+## Avertissement avant une fusion vers `main`
+
+Quand la branche visée est `main`, la fenêtre ne s'ouvre pas directement sur le
+choix de la méthode : elle s'ouvre d'abord sur un avertissement, en rouge. Fusionner
+directement sur `main` est rarement voulu, et l'erreur coûte cher.
+
+```
+┌─ WARNING ──────────────────────────┐
+│ #142 Fix settings loading          │
+│ main ← fix/settings                │
+│                                    │
+│ ⚠  DIRECT MERGE INTO MAIN  ⚠       │
+│                                    │
+│ This pull request targets main.    │
+│ Merging it will land directly on   │
+│ main.                              │
+│                                    │
+│ Enter to continue · Esc to cancel  │
+└────────────────────────────────────┘
+```
+
+Le cadre, son titre « WARNING », le nom de la branche visée, le bandeau et le
+texte sont en rouge. `Entrée` passe au choix de la méthode, sans aucun appel ;
+`Échap` ferme la fenêtre ; aucune autre touche n'agit, hormis `Ctrl-C`. Tant que
+l'avertissement est affiché, la barre d'état montre « Enter continue · Esc cancel ».
+Le nom de la branche est comparé exactement à `main` : c'est la constante
+`WARNED_BASE` de `app` qui le porte. Un nouvel essai après un échec ne repasse pas
+par l'avertissement.
+
 ## Fenêtre de confirmation
 
 Une fenêtre centrée, par-dessus la liste, qui capte tout le clavier.
@@ -110,7 +139,7 @@ impl MergeDialog {
     fn method(&self) -> Option<MergeMethod>;   // méthode sous le curseur, si elle est autorisée
 }
 
-enum MergeDialogState { Choosing, Submitting, Failed(String) }
+enum MergeDialogState { Warning, Choosing, Submitting, Failed(String) }
 ```
 
 `App` porte `merge: Option<MergeDialog>` et `notice: Option<String>`. Tant que
@@ -125,7 +154,7 @@ Libellés exacts des méthodes dans la liste : « Create a merge commit », « S
 merge », « Rebase and merge ». L'état `Submitting` utilise la forme courte, sans
 capitale : « create a merge commit », « squash and merge », « rebase and merge ».
 
-`app` expose la fenêtre sous la forme d'un `MergeRender { title, lines }`, où chaque
+`app` expose la fenêtre sous la forme d'un `MergeRender { title, frame_tone, lines }`, où chaque
 ligne est une suite de morceaux teintés comme une ligne de liste : un titre de cadre
 et des lignes déjà écrites, marqueur de sélection et couleurs comprises. Toute la
 composition — le marqueur, les libellés, les tons, le message d'attente — est
@@ -201,6 +230,10 @@ fusion, une confirmation.
 
 - Le premier rang de la fenêtre porte le numéro puis le titre, le second la branche
   visée, une flèche vers la gauche et la branche d'origine.
+- `m` sur une PR qui vise `main` ouvre d'abord l'avertissement, en rouge, sans
+  les méthodes ; `Entrée` mène au choix de la méthode sans aucun appel, `Échap`
+  ferme la fenêtre.
+- Une PR qui vise une autre branche ouvre directement le choix de la méthode.
 - La fenêtre liste toujours les trois méthodes, dans l'ordre commit de fusion,
   écrasement, rebasage.
 - Un dépôt n'autorisant que l'écrasement affiche le commit de fusion et le rebasage

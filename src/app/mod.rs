@@ -130,6 +130,11 @@ pub struct Loading {
 const HELP_LIST: &str = "↑↓ move · → details · m merge · r refresh · o browser · q quit";
 const HELP_DETAIL: &str = "↑↓ scroll · ← list · m merge · r refresh · o browser · q quit";
 const HELP_MERGE: &str = "↑↓ choose · Enter confirm · Esc cancel";
+const HELP_MERGE_WARNING: &str = "Enter continue · Esc cancel";
+
+/// Branche dont la fusion passe d'abord par un avertissement. Viser `main`
+/// directement est rarement voulu : on le dit avant de proposer les méthodes.
+const WARNED_BASE: &str = "main";
 
 /// Titre de la notification annonçant qu'une pull request est fusionnable.
 const READY_TITLE: &str = "Ready to merge";
@@ -159,6 +164,9 @@ pub enum View {
 /// Où en est la fenêtre de confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeDialogState {
+    /// Avertissement préalable : la PR vise `WARNED_BASE`. `Entrée` passe au
+    /// choix de la méthode, `Échap` ferme.
+    Warning,
     Choosing,
     Submitting,
     /// Message d'erreur de GitHub, repris tel quel.
@@ -482,6 +490,11 @@ impl App {
         };
 
         let outcome = match (&dialog.state, key_pressed) {
+            (MergeDialogState::Warning, Key::Enter) => {
+                dialog.state = MergeDialogState::Choosing;
+                Outcome::Nothing
+            }
+            (MergeDialogState::Warning, Key::Esc) => Outcome::Close,
             (MergeDialogState::Choosing, Key::Up) => {
                 dialog.selected = next_allowed(&dialog.methods, dialog.selected, false);
                 Outcome::Nothing
@@ -700,7 +713,11 @@ impl App {
             head_ref: summary.head_ref.clone(),
             methods,
             selected,
-            state: MergeDialogState::Choosing,
+            state: if summary.base_ref == WARNED_BASE {
+                MergeDialogState::Warning
+            } else {
+                MergeDialogState::Choosing
+            },
         });
         Vec::new()
     }
@@ -940,8 +957,12 @@ impl App {
 
         parts.push((
             HELP,
-            if self.merge.is_some() {
-                HELP_MERGE.to_string()
+            if let Some(dialog) = &self.merge {
+                match dialog.state {
+                    MergeDialogState::Warning => HELP_MERGE_WARNING,
+                    _ => HELP_MERGE,
+                }
+                .to_string()
             } else {
                 match self.view {
                     View::List => HELP_LIST,
@@ -2084,6 +2105,60 @@ pub(crate) mod tests {
             bar.contains("← list") && !bar.contains("→ details"),
             "une touche sans effet dans la vue n'est pas rappelée : {bar}"
         );
+    }
+
+    /// PR visant `main`, toutes méthodes autorisées.
+    fn pr_into_main(number: u32) -> PrSummary {
+        PrSummary {
+            base_ref: "main".to_string(),
+            ..pr_with_rules(number, all_allowed())
+        }
+    }
+
+    #[test]
+    fn a_pull_request_into_main_opens_on_the_warning() {
+        let app = app_with_dialog(pr_into_main(142));
+        assert_eq!(
+            app.merge.as_ref().map(|dialog| &dialog.state),
+            Some(&MergeDialogState::Warning)
+        );
+        assert!(app.status_line(ROOMY).contains(HELP_MERGE_WARNING));
+    }
+
+    #[test]
+    fn a_pull_request_into_another_branch_skips_the_warning() {
+        let app = app_with_dialog(pr_with_rules(142, all_allowed()));
+        assert_eq!(
+            app.merge.as_ref().map(|dialog| &dialog.state),
+            Some(&MergeDialogState::Choosing)
+        );
+    }
+
+    #[test]
+    fn enter_on_the_warning_moves_to_the_method_choice_without_any_call() {
+        let mut app = app_with_dialog(pr_into_main(142));
+        let commands = app.handle(Event::Key(Key::Enter));
+        assert!(commands.is_empty(), "{commands:?}");
+        assert_eq!(
+            app.merge.as_ref().map(|dialog| &dialog.state),
+            Some(&MergeDialogState::Choosing)
+        );
+    }
+
+    #[test]
+    fn escape_on_the_warning_closes_the_dialog() {
+        let mut app = app_with_dialog(pr_into_main(142));
+        let commands = app.handle(Event::Key(Key::Esc));
+        assert!(commands.is_empty(), "{commands:?}");
+        assert!(app.merge.is_none());
+    }
+
+    #[test]
+    fn the_arrows_do_nothing_on_the_warning() {
+        let mut app = app_with_dialog(pr_into_main(142));
+        let before = app.merge.clone();
+        app.handle(Event::Key(Key::Down));
+        assert_eq!(app.merge, before);
     }
 
     #[test]
