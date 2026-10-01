@@ -608,6 +608,8 @@ fn mergeable_label(state: MergeableState) -> &'static str {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MergeRender {
     pub title: String,
+    /// Ton du cadre et de son titre. `None` : la couleur par défaut.
+    pub frame_tone: Option<Tone>,
     pub lines: Vec<MergeLine>,
 }
 
@@ -642,6 +644,10 @@ impl MergeLine {
 }
 
 const MERGE_TITLE: &str = " Merge ";
+const WARNING_TITLE: &str = " WARNING ";
+const WARNING_HEADLINE: &str = "⚠  DIRECT MERGE INTO MAIN  ⚠";
+const WARNING_TEXT: &str = "This pull request targets main. Merging it will land directly on main.";
+const HELP_WARNING: &str = "Enter to continue · Esc to cancel";
 /// Flèche de l'en-tête : la branche d'origine va vers la branche visée.
 const MERGE_ARROW: &str = " ← ";
 const HELP_CHOOSING: &str = "Enter to confirm · Esc to cancel";
@@ -693,6 +699,10 @@ impl App {
         // Les tons de l'en-tête sont ceux de la liste : numéro et flèche en
         // gris, titre en couleur par défaut, branches en bleu comme la
         // colonne de la branche visée.
+        // Dans l'avertissement, la branche visée passe au rouge : c'est elle
+        // qui justifie la fenêtre.
+        let warning = dialog.state == MergeDialogState::Warning;
+        let base_tone = if warning { Tone::Red } else { Tone::Blue };
         let mut lines = vec![
             MergeLine {
                 cells: vec![
@@ -703,7 +713,7 @@ impl App {
             },
             MergeLine {
                 cells: vec![
-                    Cell::toned(dialog.base_ref.clone(), Tone::Blue),
+                    Cell::toned(dialog.base_ref.clone(), base_tone),
                     Cell::toned(MERGE_ARROW, Tone::Gray),
                     Cell::toned(dialog.head_ref.clone(), Tone::Blue),
                 ],
@@ -712,6 +722,13 @@ impl App {
         ];
 
         match &dialog.state {
+            MergeDialogState::Warning => {
+                lines.push(MergeLine::toned(WARNING_HEADLINE, Tone::Red));
+                lines.push(MergeLine::empty());
+                lines.push(MergeLine::toned(WARNING_TEXT, Tone::Red));
+                lines.push(MergeLine::empty());
+                lines.push(MergeLine::plain(HELP_WARNING));
+            }
             MergeDialogState::Choosing => {
                 lines.push(MergeLine::plain("Method:"));
                 for (index, choice) in dialog.methods.iter().enumerate() {
@@ -759,7 +776,8 @@ impl App {
             .collect();
 
         Some(MergeRender {
-            title: MERGE_TITLE.to_string(),
+            title: if warning { WARNING_TITLE } else { MERGE_TITLE }.to_string(),
+            frame_tone: warning.then_some(Tone::Red),
             lines,
         })
     }
@@ -1439,6 +1457,38 @@ mod tests {
         assert_eq!(tone("Create a merge commit"), Some(Tone::Gray));
         assert_eq!(tone("Rebase and merge"), Some(Tone::Gray));
         assert_eq!(tone("Squash and merge"), None);
+    }
+
+    #[test]
+    fn a_pull_request_into_main_shows_a_red_warning_first() {
+        let mut app = app_with(vec![PrSummary {
+            base_ref: "main".to_string(),
+            ..pr_with_rules(142, all_allowed())
+        }]);
+        app.handle(Event::Key(Key::Char('m')));
+        let render = app
+            .merge_render(LARGE)
+            .expect("la fenêtre doit être ouverte");
+        let texts: Vec<String> = render.lines.iter().map(MergeLine::text).collect();
+
+        assert_eq!(render.title, " WARNING ");
+        assert_eq!(render.frame_tone, Some(Tone::Red));
+        assert_eq!(texts[1], "main ← ma-branche");
+        assert_eq!(render.lines[1].cells[0], Cell::toned("main", Tone::Red));
+        assert_eq!(
+            render.lines[3].cells,
+            vec![Cell::toned("⚠  DIRECT MERGE INTO MAIN  ⚠", Tone::Red)]
+        );
+        assert!(!texts.iter().any(|line| line.contains("Method:")));
+        assert!(texts.contains(&"Enter to continue · Esc to cancel".to_string()));
+
+        // `Entrée` mène à la fenêtre habituelle, cadre sans couleur.
+        app.handle(Event::Key(Key::Enter));
+        let render = app
+            .merge_render(LARGE)
+            .expect("la fenêtre doit être ouverte");
+        assert_eq!(render.title, " Merge ");
+        assert_eq!(render.frame_tone, None);
     }
 
     #[test]

@@ -45,8 +45,13 @@ pub fn draw(frame: &mut Frame, area: Rect, render: &MergeRender) {
     // `Clear` d'abord : sans lui, la liste resterait visible sous la fenêtre.
     frame.render_widget(Clear, area);
 
+    let frame_style = match render.frame_tone {
+        Some(tone) => Style::default().fg(color(tone)),
+        None => Style::default(),
+    };
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_style(frame_style)
         .title(render.title.clone());
     let inner = block.inner(area);
     frame.render_widget(block, area);
