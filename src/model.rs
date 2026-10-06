@@ -136,6 +136,9 @@ pub struct PrSummary {
     pub head_ref: String,
     pub updated_at: DateTime<Utc>,
     pub repo_rules: RepoMergeRules,
+    /// Vérifications du dernier commit, une par une. Elles viennent avec la
+    /// liste : celles en cours s'affichent sous la ligne de la pull request.
+    pub check_runs: Vec<CheckRun>,
 }
 
 /// Solde d'appels restant, lu à chaque requête réussie.

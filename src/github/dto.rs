@@ -83,12 +83,11 @@ pub struct Commit {
 #[derive(Debug, Deserialize)]
 pub struct Rollup {
     pub state: Option<String>,
-    /// Rempli par la requête de détail seulement.
     pub contexts: Option<ContextConnection>,
 }
 
-/// Vide côté requête de liste, qui ne demande pas les contextes. Seule la
-/// requête de détail les remplit.
+/// Contextes de vérification du dernier commit. La requête de liste ne
+/// demande pas leurs liens, que seule la vue détail affiche.
 #[derive(Debug, Deserialize)]
 pub struct ContextConnection {
     pub nodes: Vec<Option<ContextNode>>,
@@ -242,6 +241,7 @@ impl SearchNode {
                 rebase: repository.rebase_merge_allowed,
                 delete_branch_on_merge: repository.delete_branch_on_merge,
             },
+            check_runs: check_runs(self.commits.as_ref()),
         })
     }
 }
@@ -257,6 +257,24 @@ fn rollup_state(commits: Option<&CommitConnection>) -> ChecksState {
         Some(rollup) => checks_from_rollup(rollup.state.as_deref()),
         None => ChecksState::None,
     }
+}
+
+/// Vérifications du dernier commit, une par une. Aucun commit ou aucun
+/// `statusCheckRollup` donne une liste vide.
+fn check_runs(commits: Option<&CommitConnection>) -> Vec<CheckRun> {
+    commits
+        .and_then(|connection| connection.nodes.first())
+        .and_then(|node| node.commit.status_check_rollup.as_ref())
+        .and_then(|rollup| rollup.contexts.as_ref())
+        .map(|connection| {
+            connection
+                .nodes
+                .iter()
+                .flatten()
+                .filter_map(ContextNode::to_check_run)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Table de la spec. Une valeur inconnue est traitée comme une absence : mieux
@@ -302,27 +320,11 @@ impl PullRequestDetail {
     /// Assemble la vue détail autour du résumé déjà connu : la requête de
     /// détail ne renvoie aucun des champs de la liste.
     pub fn to_detail(&self, summary: PrSummary) -> PrDetail {
-        let contexts = self
-            .commits
-            .as_ref()
-            .and_then(|connection| connection.nodes.first())
-            .and_then(|node| node.commit.status_check_rollup.as_ref())
-            .and_then(|rollup| rollup.contexts.as_ref());
-
         PrDetail {
             summary,
             node_id: self.id.clone(),
             body: self.body.clone().unwrap_or_default(),
-            checks: contexts
-                .map(|connection| {
-                    connection
-                        .nodes
-                        .iter()
-                        .flatten()
-                        .filter_map(ContextNode::to_check_run)
-                        .collect()
-                })
-                .unwrap_or_default(),
+            checks: check_runs(self.commits.as_ref()),
             reviews: self
                 .reviews
                 .as_ref()
@@ -548,6 +550,34 @@ mod tests {
         let without_rollup = &page.pull_requests[4];
         assert_eq!(without_rollup.key.number, 3);
         assert_eq!(without_rollup.checks, ChecksState::None);
+    }
+
+    #[test]
+    fn the_check_runs_come_with_the_list_in_both_forms() {
+        let page = page();
+        let pending = &page.pull_requests[2];
+        assert_eq!(pending.key.number, 13);
+        let checks: Vec<(&str, ChecksState)> = pending
+            .check_runs
+            .iter()
+            .map(|check| (check.name.as_str(), check.state))
+            .collect();
+        assert_eq!(
+            checks,
+            vec![
+                ("build", ChecksState::Success),
+                ("test", ChecksState::Pending),
+                ("ci/deploy-preview", ChecksState::Pending),
+            ],
+            "un nœud vide, d'un type inconnu de l'union, est ignoré"
+        );
+    }
+
+    #[test]
+    fn a_pr_without_any_ci_has_no_check_runs() {
+        let page = page();
+        assert!(page.pull_requests[1].check_runs.is_empty());
+        assert!(page.pull_requests[4].check_runs.is_empty());
     }
 
     #[test]
