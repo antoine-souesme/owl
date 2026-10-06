@@ -139,9 +139,15 @@ async fn run(settings: config::Config, token: token::Token) -> Result<()> {
         spawn_timer(sender.clone(), interval);
     }
 
+    // Producteur 3 : l'horloge d'animation, toujours active.
+    spawn_animation(sender.clone());
+
     terminal.draw(|frame| ui::draw(frame, &state))?;
 
     while let Some(event) = inbox.recv().await {
+        // Un tour d'animation sans rien qui tourne à l'écran ne change rien :
+        // inutile de redessiner dix fois par seconde pour rien.
+        let redraw = !matches!(event, Event::Animate) || state.is_animating();
         let mut stop = false;
         for command in state.handle(event) {
             stop |= execute_command(command, &sender, &client);
@@ -149,7 +155,9 @@ async fn run(settings: config::Config, token: token::Token) -> Result<()> {
         if stop {
             break;
         }
-        terminal.draw(|frame| ui::draw(frame, &state))?;
+        if redraw {
+            terminal.draw(|frame| ui::draw(frame, &state))?;
+        }
     }
 
     Ok(())
@@ -323,6 +331,24 @@ fn spawn_timer(sender: UnboundedSender<Event>, seconds: u64) {
         loop {
             minuteur.tick().await;
             if sender.send(Event::Tick).is_err() {
+                return;
+            }
+        }
+    });
+}
+
+/// Intervalle entre deux images de l'animation.
+const ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Émet un `Animate` à intervalle court, pour faire tourner les pictogrammes.
+fn spawn_animation(sender: UnboundedSender<Event>) {
+    tokio::spawn(async move {
+        let mut minuteur = tokio::time::interval(ANIMATION_INTERVAL);
+        // Des images manquées n'ont pas à être rattrapées en rafale.
+        minuteur.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            minuteur.tick().await;
+            if sender.send(Event::Animate).is_err() {
                 return;
             }
         }
