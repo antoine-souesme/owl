@@ -151,7 +151,7 @@ impl App {
             self.prs
                 .iter()
                 .map(|pr| ListRow {
-                    checks: checks_glyph(pr.checks),
+                    checks: checks_glyph(pr.checks, self.animation_frame),
                     review: review_glyph(pr.review),
                     cells: row_cells(
                         pr,
@@ -282,7 +282,10 @@ pub(super) fn truncate(text: &str, width: usize) -> String {
     cut
 }
 
-fn checks_glyph(state: ChecksState) -> Glyph {
+/// Images de l'animation des vérifications en cours, une par tour d'horloge.
+const PENDING_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+fn checks_glyph(state: ChecksState, frame: usize) -> Glyph {
     match state {
         ChecksState::Success => Glyph {
             symbol: '✓',
@@ -293,7 +296,7 @@ fn checks_glyph(state: ChecksState) -> Glyph {
             tone: Tone::Red,
         },
         ChecksState::Pending => Glyph {
-            symbol: '○',
+            symbol: PENDING_FRAMES[frame % PENDING_FRAMES.len()],
             tone: Tone::Yellow,
         },
         ChecksState::None => Glyph {
@@ -389,6 +392,7 @@ impl App {
                 lines.extend(detail_body(
                     &cache.detail,
                     &cache.loaded_at.format("%H:%M").to_string(),
+                    self.animation_frame,
                 ));
             }
         }
@@ -443,7 +447,7 @@ fn section(title: impl Into<String>) -> Vec<DetailLine> {
 
 /// Corps du détail, dans l'ordre de la spec : branches, états en clair,
 /// description, vérifications, échanges, fichiers.
-fn detail_body(detail: &PrDetail, time: &str) -> Vec<DetailLine> {
+fn detail_body(detail: &PrDetail, time: &str, frame: usize) -> Vec<DetailLine> {
     let mut lines = section("Branches");
     lines.push(DetailLine::plain(format!(
         "{INDENT}{} -> {}",
@@ -451,7 +455,7 @@ fn detail_body(detail: &PrDetail, time: &str) -> Vec<DetailLine> {
     )));
 
     lines.extend(section("Status"));
-    let checks = checks_glyph(detail.summary.checks);
+    let checks = checks_glyph(detail.summary.checks, frame);
     lines.push(DetailLine::toned(
         format!(
             "{INDENT}{} {}",
@@ -493,7 +497,7 @@ fn detail_body(detail: &PrDetail, time: &str) -> Vec<DetailLine> {
 
     lines.extend(section(format!("Checks ({})", detail.checks.len())));
     for check in &detail.checks {
-        let glyph = checks_glyph(check.state);
+        let glyph = checks_glyph(check.state, frame);
         lines.push(DetailLine::toned(
             format!("{INDENT}{} {}", glyph.symbol, check.name),
             glyph.tone,
@@ -1005,11 +1009,24 @@ mod tests {
     }
 
     #[test]
+    fn running_checks_turn_with_each_animation_tick() {
+        let mut app = app_with(vec![PrSummary {
+            checks: ChecksState::Pending,
+            ..pr(1)
+        }]);
+        let first = rows(&app, LARGE)[0].checks.symbol;
+
+        app.handle(Event::Animate);
+
+        assert_ne!(rows(&app, LARGE)[0].checks.symbol, first);
+    }
+
+    #[test]
     fn each_checks_state_has_its_glyph() {
         let cases = [
             (ChecksState::Success, '✓', Tone::Green),
             (ChecksState::Failure, '✗', Tone::Red),
-            (ChecksState::Pending, '○', Tone::Yellow),
+            (ChecksState::Pending, '⠋', Tone::Yellow),
             (ChecksState::None, '·', Tone::Gray),
         ];
         for (state, symbol, tone) in cases {

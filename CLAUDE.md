@@ -3,15 +3,7 @@
 Outil en ligne de commande interactif qui liste les pull requests de mon compte
 GitHub dans le terminal et permet de les fusionner selon la règle du dépôt.
 
-Le résumé du projet est dans `DESCRIPTION.md`. Les spécifications sont dans
-`docs/specs/`, à lire dans l'ordre numéroté ; `docs/specs/README.md` en donne l'index.
-
-## Ordre de vérité
-
-Les specs font foi. Si le code s'en écarte, c'est le code qui a tort — sauf décision
-explicite, auquel cas on met la spec à jour dans le même commit que le code.
-
-Chaque spec se termine par ses critères de réussite. Ce sont les tests à écrire.
+Le résumé du projet est dans `DESCRIPTION.md`.
 
 ## Commandes
 
@@ -28,8 +20,7 @@ n'est optionnelle.
 
 ## Règles d'architecture
 
-Elles sont détaillées dans `docs/specs/00-fondations.md`. En bref, les dépendances
-entre modules sont à sens unique et strictes :
+Les dépendances entre modules sont à sens unique et strictes :
 
 - `model` et `filter` ne dépendent ni du réseau ni du terminal.
 - `github` dépend de `model` et `filter`, jamais de `app` ni `ui`.
