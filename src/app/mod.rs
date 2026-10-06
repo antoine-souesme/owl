@@ -8,7 +8,8 @@
 mod render;
 
 pub use render::{
-    ListRender, ListRow, MergeLine, MergeRender, Tone, DETAIL_TITLE, LIST_TITLE, SELECTION_MARKER,
+    Cell, ListRender, ListRow, MergeLine, MergeRender, Tone, DETAIL_TITLE, LIST_TITLE,
+    SELECTION_MARKER,
 };
 
 use render::truncate;
@@ -1081,6 +1082,7 @@ pub(crate) mod tests {
                 rebase: true,
                 delete_branch_on_merge: true,
             },
+            check_runs: Vec::new(),
         }
     }
 

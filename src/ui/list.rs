@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, ListRender, ListRow, LIST_TITLE, SELECTION_MARKER};
+use crate::app::{App, Cell, ListRender, ListRow, LIST_TITLE, SELECTION_MARKER};
 use crate::ui::color;
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
@@ -52,7 +52,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Une ligne : deux pictogrammes colorés, à largeur fixe, puis les morceaux
-/// composés par `app`, chacun avec son ton.
+/// composés par `app`, chacun avec son ton. Les vérifications en cours
+/// suivent, une par ligne, dans le même élément : la sélection les englobe.
 fn item(line: ListRow) -> ListItem<'static> {
     let mut spans = vec![
         Span::styled(
@@ -66,15 +67,29 @@ fn item(line: ListRow) -> ListItem<'static> {
         ),
         Span::raw("  "),
     ];
-    for cell in line.cells {
-        let mut style = match cell.tone {
-            Some(tone) => Style::default().fg(color(tone)),
-            None => Style::default(),
-        };
-        if line.dim {
-            style = style.add_modifier(Modifier::DIM);
-        }
-        spans.push(Span::styled(cell.text, style));
-    }
-    ListItem::new(Line::from(spans))
+    spans.extend(cells(line.cells, line.dim));
+    let mut lines = vec![Line::from(spans)];
+    lines.extend(
+        line.running_checks
+            .into_iter()
+            .map(|check| Line::from(cells(check, line.dim))),
+    );
+    ListItem::new(lines)
+}
+
+/// Morceaux mis bout à bout, chacun avec son ton, grisés pour un brouillon.
+fn cells(cells: Vec<Cell>, dim: bool) -> Vec<Span<'static>> {
+    cells
+        .into_iter()
+        .map(|cell| {
+            let mut style = match cell.tone {
+                Some(tone) => Style::default().fg(color(tone)),
+                None => Style::default(),
+            };
+            if dim {
+                style = style.add_modifier(Modifier::DIM);
+            }
+            Span::styled(cell.text, style)
+        })
+        .collect()
 }

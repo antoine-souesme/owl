@@ -62,6 +62,9 @@ pub struct ListRow {
     /// Dépôt, numéro, âge, branche cible et titre : colonnes déjà alignées,
     /// titre déjà tronqué, marques du brouillon et du conflit déjà posées.
     pub cells: Vec<Cell>,
+    /// Vérifications en cours, une ligne chacune sous celle de la pull
+    /// request : retrait, raccord et nom déjà posés, nom déjà tronqué.
+    pub running_checks: Vec<Vec<Cell>>,
     /// Ligne grisée, parce que la pull request est un brouillon.
     pub dim: bool,
 }
@@ -95,6 +98,9 @@ pub const SELECTION_MARKER: &str = "→ ";
 /// pictogramme, une espace, un pictogramme, deux espaces. `ui` la pose,
 /// `app` la déduit de la place disponible.
 const GLYPHS: usize = 7;
+
+/// Raccord d'une vérification en cours à la ligne de sa pull request.
+const CHECK_CONNECTOR: &str = "⎿  ";
 
 /// Espacement entre deux colonnes de texte.
 const GAP: usize = 2;
@@ -162,6 +168,7 @@ impl App {
                         target.then_some(target_column),
                         title_width,
                     ),
+                    running_checks: running_checks(pr, width),
                     dim: pr.is_draft,
                 })
                 .collect(),
@@ -176,6 +183,25 @@ impl App {
             .collect::<Vec<_>>()
             .join(" · ")
     }
+}
+
+/// Lignes des vérifications en cours, dans l'ordre de GitHub. Le raccord se
+/// place sous le dépôt : `ui` décale déjà ces lignes de la largeur du
+/// marqueur de sélection, le retrait ne couvre que les pictogrammes.
+fn running_checks(pr: &PrSummary, width: usize) -> Vec<Vec<Cell>> {
+    let indent = GLYPHS - SELECTION_MARKER.chars().count();
+    let name_width = width.saturating_sub(GLYPHS + CHECK_CONNECTOR.chars().count());
+    pr.check_runs
+        .iter()
+        .filter(|check| check.state == ChecksState::Pending)
+        .map(|check| {
+            vec![
+                Cell::plain(" ".repeat(indent)),
+                Cell::toned(CHECK_CONNECTOR, Tone::Gray),
+                Cell::plain(truncate(&check.name, name_width)),
+            ]
+        })
+        .collect()
 }
 
 /// Retient une colonne facultative si elle tient dans la place restante,
@@ -944,6 +970,73 @@ mod tests {
         );
         assert_eq!(row.text(), "moi/depot │ #142  3h  develop  Titre 142");
         assert!(!row.dim);
+    }
+
+    fn check(name: &str, state: ChecksState) -> crate::model::CheckRun {
+        crate::model::CheckRun {
+            name: name.to_string(),
+            state,
+            url: None,
+        }
+    }
+
+    fn running_texts(row: &ListRow) -> Vec<String> {
+        row.running_checks
+            .iter()
+            .map(|cells| cells.iter().map(|cell| cell.text.as_str()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn only_the_running_checks_appear_under_the_row() {
+        let app = app_with(vec![PrSummary {
+            checks: ChecksState::Pending,
+            check_runs: vec![
+                check("build", ChecksState::Success),
+                check("test", ChecksState::Pending),
+                check("lint", ChecksState::Failure),
+                check("deploy", ChecksState::Pending),
+            ],
+            ..pr_aged(142)
+        }]);
+        let row = rows(&app, LARGE).remove(0);
+        assert_eq!(running_texts(&row), vec!["     ⎿  test", "     ⎿  deploy"]);
+        assert_eq!(row.running_checks[0][1].tone, Some(Tone::Gray));
+    }
+
+    #[test]
+    fn the_connector_sits_under_the_repo() {
+        let app = app_with(vec![PrSummary {
+            check_runs: vec![check("test", ChecksState::Pending)],
+            ..pr_aged(142)
+        }]);
+        let row = rows(&app, LARGE).remove(0);
+        // `ui` décale la ligne de la largeur du marqueur, comme la ligne de
+        // la PR, dont le dépôt commence après les pictogrammes.
+        let connector_column =
+            SELECTION_MARKER.chars().count() + running_texts(&row)[0].find('⎿').unwrap();
+        assert_eq!(connector_column, GLYPHS);
+    }
+
+    #[test]
+    fn a_pr_without_running_checks_has_no_line_below() {
+        let app = app_with(vec![PrSummary {
+            check_runs: vec![check("build", ChecksState::Success)],
+            ..pr_aged(142)
+        }]);
+        assert!(rows(&app, LARGE)[0].running_checks.is_empty());
+    }
+
+    #[test]
+    fn a_long_check_name_is_cut_to_the_width() {
+        let app = app_with(vec![PrSummary {
+            check_runs: vec![check(&"x".repeat(100), ChecksState::Pending)],
+            ..pr_aged(142)
+        }]);
+        let row = rows(&app, 40).remove(0);
+        let text = &running_texts(&row)[0];
+        assert_eq!(text.chars().count(), 40 - SELECTION_MARKER.chars().count());
+        assert!(text.ends_with('…'));
     }
 
     #[test]

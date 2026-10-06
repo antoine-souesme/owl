@@ -589,6 +589,7 @@ mod tests {
                 rebase: true,
                 delete_branch_on_merge: true,
             },
+            check_runs: Vec::new(),
         };
 
         let detail = client.fetch_detail(&summary).await.expect("succès attendu");
@@ -623,6 +624,7 @@ mod tests {
                 rebase: true,
                 delete_branch_on_merge: false,
             },
+            check_runs: Vec::new(),
         };
         let error = client
             .fetch_detail(&summary)
@@ -659,6 +661,7 @@ mod tests {
                 rebase: false,
                 delete_branch_on_merge: true,
             },
+            check_runs: Vec::new(),
         }
     }
 

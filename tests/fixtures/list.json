@@ -85,7 +85,26 @@
               {
                 "commit": {
                   "statusCheckRollup": {
-                    "state": "PENDING"
+                    "state": "PENDING",
+                    "contexts": {
+                      "nodes": [
+                        {
+                          "name": "build",
+                          "conclusion": "SUCCESS",
+                          "status": "COMPLETED"
+                        },
+                        {
+                          "name": "test",
+                          "conclusion": null,
+                          "status": "IN_PROGRESS"
+                        },
+                        {
+                          "context": "ci/deploy-preview",
+                          "state": "PENDING"
+                        },
+                        {}
+                      ]
+                    }
                   }
                 }
               }
