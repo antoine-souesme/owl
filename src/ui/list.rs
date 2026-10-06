@@ -52,7 +52,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Une ligne : deux pictogrammes colorés, à largeur fixe, puis les morceaux
-/// composés par `app`, chacun avec son ton. Les vérifications en cours
+/// composés par `app`, chacun avec son ton. Les vérifications
 /// suivent, une par ligne, dans le même élément : la sélection les englobe.
 fn item(line: ListRow) -> ListItem<'static> {
     let mut spans = vec![
@@ -70,7 +70,7 @@ fn item(line: ListRow) -> ListItem<'static> {
     spans.extend(cells(line.cells, line.dim));
     let mut lines = vec![Line::from(spans)];
     lines.extend(
-        line.running_checks
+        line.check_lines
             .into_iter()
             .map(|check| Line::from(cells(check, line.dim))),
     );
