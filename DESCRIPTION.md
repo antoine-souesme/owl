@@ -54,7 +54,3 @@ l'API GraphQL de GitHub : une seule requête ramène la liste entière avec tous
 ## Prérequis
 
 Rust (à installer), et `gh` installé et connecté.
-
-## Documentation
-
-Les spécifications détaillées se trouvent dans `docs/specs/`.

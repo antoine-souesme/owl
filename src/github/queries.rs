@@ -31,7 +31,10 @@ pub const LIST: &str = r#"query List($q: String!, $n: Int!) {
           deleteBranchOnMerge
         }
         commits(last: 1) {
-          nodes { commit { statusCheckRollup { state } } }
+          nodes { commit { statusCheckRollup { state contexts(first: 50) { nodes {
+            ... on CheckRun { name conclusion status }
+            ... on StatusContext { context state }
+          } } } } }
         }
       }
     }

@@ -8,7 +8,8 @@
 mod render;
 
 pub use render::{
-    ListRender, ListRow, MergeLine, MergeRender, Tone, DETAIL_TITLE, LIST_TITLE, SELECTION_MARKER,
+    Cell, ListRender, ListRow, MergeLine, MergeRender, Tone, DETAIL_TITLE, LIST_TITLE,
+    SELECTION_MARKER,
 };
 
 use render::truncate;
@@ -21,7 +22,8 @@ use crate::config::Config;
 use crate::filter::{self, Filter};
 use crate::github::GithubError;
 use crate::model::{
-    ListPage, MergeMethod, MergeState, MergeableState, PrDetail, PrKey, PrSummary, RateLimit,
+    ChecksState, ListPage, MergeMethod, MergeState, MergeableState, PrDetail, PrKey, PrSummary,
+    RateLimit,
 };
 
 /// Numéro de génération d'une demande réseau. Un résultat dont la génération
@@ -60,6 +62,9 @@ pub enum Event {
     /// après chaque événement, et c'est ce redessin qui remet l'écran à la
     /// bonne dimension.
     Resize,
+    /// Tour de l'horloge d'animation, bien plus rapide que `Tick`. Il fait
+    /// tourner le pictogramme des vérifications en cours.
+    Animate,
     /// Arrêt demandé par `main` : panique d'une tâche, ou clavier hors service.
     Quit,
     /// Résultat d'une requête de liste.
@@ -254,6 +259,8 @@ pub struct App {
     /// après un rafraîchissement qui a réordonné la liste.
     selected_key: Option<PrKey>,
     pub loading: Loading,
+    /// Image courante de l'animation des vérifications en cours.
+    pub animation_frame: usize,
     /// Dernière erreur reçue, reprise telle quelle de GitHub. Effacée par la
     /// première réponse réussie.
     pub error: Option<String>,
@@ -295,12 +302,33 @@ pub struct App {
 }
 
 impl App {
+    /// Vrai quand une vérification en cours est à l'écran : la liste en montre
+    /// une, ou le détail ouvert en contient une. Sans elle, l'horloge
+    /// d'animation n'a rien à faire tourner et l'écran n'est pas redessiné.
+    pub fn is_animating(&self) -> bool {
+        if self.prs.iter().any(|pr| pr.checks == ChecksState::Pending) {
+            return true;
+        }
+        let View::Detail { key, .. } = &self.view else {
+            return false;
+        };
+        self.details.get(key).is_some_and(|cache| {
+            cache.detail.summary.checks == ChecksState::Pending
+                || cache
+                    .detail
+                    .checks
+                    .iter()
+                    .any(|check| check.state == ChecksState::Pending)
+        })
+    }
+
     pub fn new(config: Config) -> Self {
         Self {
             prs: Vec::new(),
             selected: 0,
             selected_key: None,
             loading: Loading::default(),
+            animation_frame: 0,
             error: None,
             rate_limit: None,
             suspended_until: None,
@@ -345,6 +373,12 @@ impl App {
             // l'écran, et le message en cours n'est pas effacé — un
             // redimensionnement n'est pas un appui sur une touche.
             Event::Resize => Vec::new(),
+            Event::Animate => {
+                if self.is_animating() {
+                    self.animation_frame = self.animation_frame.wrapping_add(1);
+                }
+                Vec::new()
+            }
             // Une requête de liste déjà en vol suffit, la liste ne change pas
             // sous une fenêtre de fusion ouverte, et une limite d'appels
             // atteinte interdit de réessayer : le tour est perdu, le suivant
@@ -1048,6 +1082,7 @@ pub(crate) mod tests {
                 rebase: true,
                 delete_branch_on_merge: true,
             },
+            check_runs: Vec::new(),
         }
     }
 
@@ -1483,6 +1518,30 @@ pub(crate) mod tests {
         assert!(commands.is_empty(), "{commands:?}");
         assert_eq!(app.selected, avant);
         assert_eq!(app.view, View::List);
+    }
+
+    #[test]
+    fn an_animation_tick_advances_the_frame_while_checks_are_running() {
+        let mut app = app_with(vec![PrSummary {
+            checks: ChecksState::Pending,
+            ..pr(1)
+        }]);
+        assert!(app.is_animating());
+
+        let commands = app.handle(Event::Animate);
+
+        assert!(commands.is_empty(), "{commands:?}");
+        assert_eq!(app.animation_frame, 1);
+    }
+
+    #[test]
+    fn an_animation_tick_changes_nothing_without_running_checks() {
+        let mut app = app_with(vec![pr(1), pr(2)]);
+        assert!(!app.is_animating());
+
+        app.handle(Event::Animate);
+
+        assert_eq!(app.animation_frame, 0);
     }
 
     #[test]

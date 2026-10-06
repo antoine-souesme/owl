@@ -86,5 +86,4 @@ cargo clippy -- -D warnings
 cargo fmt --check
 ```
 
-The project summary is in `DESCRIPTION.md`, the specifications in `docs/specs/`
-(both in French).
+The project summary is in `DESCRIPTION.md` (in French).
