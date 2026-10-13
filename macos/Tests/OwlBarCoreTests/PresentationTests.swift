@@ -129,4 +129,16 @@ struct PresentationTests {
         #expect(all.first { $0.number == "#7" }?.dim == true)
         #expect(all.first { $0.number == "#42" }?.dim == false)
     }
+
+    @Test func aRunningCheckTurnsWithTheFramesOfTheTui() {
+        let frames = (0..<11).map { checksGlyph(.pending, frame: $0).symbol }
+        #expect(frames == ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "⠋"])
+        #expect(checksGlyph(.success, frame: 3) == checksGlyph(.success))
+    }
+
+    @Test func rowsAndChecksFollowTheAnimationFrame() throws {
+        let row = try #require(rows(try recordedList(), now: now, frame: 2).first { $0.number == "#13" })
+        #expect(row.checks.symbol == "⠹")
+        #expect(row.checkLines.map(\.glyph.symbol) == ["✓", "⠹", "⠹"])
+    }
 }

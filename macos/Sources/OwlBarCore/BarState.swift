@@ -30,6 +30,8 @@ public final class BarState: ObservableObject {
     @Published public private(set) var detail: DetailStatus = .loading
     @Published public private(set) var mergeStatus: MergeStatus = .idle
     @Published public private(set) var selectedKey: PrKey?
+    /// Image courante de l'animation des vérifications en cours.
+    @Published public private(set) var frame = 0
     /// La fusion de la PR ouverte attend une confirmation.
     @Published public private(set) var confirmingMerge = false
     public private(set) var preferredMethod: MergeMethod = .squash
@@ -54,7 +56,25 @@ public final class BarState: ObservableObject {
         menuBarTitle(counter: loaded ? counter(pullRequests) : nil, failed: errorMessage != nil)
     }
 
-    public var rows: [Row] { OwlBarCore.rows(pullRequests, now: now(), selected: selectedKey) }
+    public var rows: [Row] { OwlBarCore.rows(pullRequests, now: now(), selected: selectedKey, frame: frame) }
+
+    /// Une vérification tourne quelque part à l'écran : liste ou détail.
+    public var isAnimating: Bool {
+        let inList = pullRequests.contains {
+            $0.checks == .pending || $0.checkRuns.contains { $0.state == .pending }
+        }
+        if inList { return true }
+        if case .loaded(let detail) = detail {
+            return detail.checks.contains { $0.state == .pending }
+        }
+        return false
+    }
+
+    /// Tour d'horloge de l'animation. Rien ne change, donc rien ne se
+    /// redessine, quand aucune vérification ne tourne.
+    public func tick() {
+        if isAnimating { frame += 1 }
+    }
 
     public func selectNext() { moveSelection(by: 1) }
 
@@ -117,7 +137,7 @@ public final class BarState: ObservableObject {
     }
 
     public var detailSectionList: [DetailSection] {
-        if case .loaded(let detail) = detail { return detailSections(detail, now: now()) }
+        if case .loaded(let detail) = detail { return detailSections(detail, now: now(), frame: frame) }
         return []
     }
 

@@ -22,12 +22,14 @@ public struct Glyph: Equatable, Sendable {
     public let tone: Tone
 }
 
-public func checksGlyph(_ state: ChecksState) -> Glyph {
+/// Images de l'animation des vérifications en cours, celles de la TUI.
+public let pendingFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+public func checksGlyph(_ state: ChecksState, frame: Int = 0) -> Glyph {
     switch state {
     case .success: Glyph(symbol: "✓", tone: .green)
     case .failure: Glyph(symbol: "✗", tone: .red)
-    // Pas d'animation dans un menu : un cercle vide dit « en cours ».
-    case .pending: Glyph(symbol: "◌", tone: .yellow)
+    case .pending: Glyph(symbol: pendingFrames[frame % pendingFrames.count], tone: .yellow)
     case .none: Glyph(symbol: "·", tone: .gray)
     }
 }
@@ -117,7 +119,7 @@ public struct Row: Equatable, Identifiable, Sendable {
     public let dim: Bool
 }
 
-public func rows(_ prs: [PullRequest], now: Date, selected: PrKey? = nil) -> [Row] {
+public func rows(_ prs: [PullRequest], now: Date, selected: PrKey? = nil, frame: Int = 0) -> [Row] {
     prs.map { pr in
         var flags: [String] = []
         if pr.isDraft { flags.append("draft") }
@@ -132,12 +134,12 @@ public func rows(_ prs: [PullRequest], now: Date, selected: PrKey? = nil) -> [Ro
             arrow: "←",
             source: pr.headRef,
             title: pr.title,
-            checks: checksGlyph(pr.checks),
+            checks: checksGlyph(pr.checks, frame: frame),
             review: reviewGlyph(pr.review),
             flags: flags,
             // Toutes les vérifications, dans l'ordre de GitHub.
             checkLines: pr.checkRuns.map {
-                CheckLine(connector: "⎿", glyph: checksGlyph($0.state), name: $0.name)
+                CheckLine(connector: "⎿", glyph: checksGlyph($0.state, frame: frame), name: $0.name)
             },
             dim: pr.isDraft
         )
@@ -165,10 +167,10 @@ public func detailHeader(_ detail: PrDetail) -> [String] {
     ]
 }
 
-public func detailSections(_ detail: PrDetail, now: Date) -> [DetailSection] {
+public func detailSections(_ detail: PrDetail, now: Date, frame: Int = 0) -> [DetailSection] {
     [
         DetailSection(title: "Checks", lines: detail.checks.map {
-            DetailLine(glyph: checksGlyph($0.state), text: $0.name, note: nil)
+            DetailLine(glyph: checksGlyph($0.state, frame: frame), text: $0.name, note: nil)
         }),
         DetailSection(title: "Reviews", lines: detail.reviews.map {
             DetailLine(

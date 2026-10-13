@@ -293,6 +293,32 @@ final class BarStateTests {
         #expect(state.openKey == pr.key)
         #expect(!state.confirmingMerge)
     }
+
+    @Test func aTickTurnsTheRunningChecks() async throws {
+        runner.answers["list"] = try listAnswer()
+        await state.refresh()
+        #expect(state.isAnimating, "la PR #13 a des vérifications en cours")
+        let before = state.rows.first { $0.number == "#13" }?.checks.symbol
+        state.tick()
+        let after = state.rows.first { $0.number == "#13" }?.checks.symbol
+        #expect(before == "⠋")
+        #expect(after == "⠙")
+    }
+
+    @Test func nothingTurnsWithoutARunningCheck() async throws {
+        runner.answers["list"] = try listWith([try recordedList()[0]])
+        await state.refresh()
+        #expect(!state.isAnimating)
+    }
+
+    @Test func theRunningChecksOfTheDetailTurnToo() async throws {
+        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
+        await state.open(PrKey(repo: "moi/owl", number: 42))
+        #expect(state.isAnimating)
+        state.tick()
+        let checks = try #require(state.detailSectionList.first { $0.title == "Checks" })
+        #expect(checks.lines[1].glyph?.symbol == "⠙")
+    }
 }
 
 extension JSONEncoder {

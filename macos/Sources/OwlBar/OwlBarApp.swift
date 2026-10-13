@@ -8,10 +8,18 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let state = BarState(runner: ProcessRunner(), notifier: SystemNotifier())
     private var loop: Task<Void, Never>?
+    private var animation: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         SystemNotifier.requestPermission()
         LaunchAtLogin.registerOnFirstLaunch()
+        // L'horloge de l'animation, au rythme de la TUI : 100 ms.
+        animation = Task { [state] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                state.tick()
+            }
+        }
         loop = Task { [state] in
             await state.refresh()
             // Un intervalle à zéro arrête la boucle : seul le bouton du
