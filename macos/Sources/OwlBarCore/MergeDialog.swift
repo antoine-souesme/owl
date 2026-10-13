@@ -3,9 +3,9 @@
 // avant une fusion directe sur une branche protégée, choix de la méthode,
 // fusion en cours, échec avec le message de GitHub tel quel.
 
-/// Branches visées pour lesquelles la fusion commence par un avertissement.
-/// La TUI n'avertit que pour `main` ; l'app avertit aussi pour `develop`.
-public let warnedBases = ["main", "develop"]
+/// Branche visée pour laquelle la fusion commence par un avertissement,
+/// comme dans la TUI.
+public let warnedBase = "main"
 
 public let deniedDraft = "This pull request is a draft, it must be published first."
 public let deniedConflicts = "Conflicts to resolve."
@@ -79,7 +79,7 @@ public func openMerge(_ pr: PullRequest, lastUsed: MergeMethod?, preferred: Merg
         headRef: pr.headRef,
         choices: choices,
         selected: selected,
-        stage: warnedBases.contains(pr.baseRef) ? .warning : .choosing
+        stage: pr.baseRef == warnedBase ? .warning : .choosing
     ))
 }
 

@@ -48,14 +48,14 @@ struct MergeDialogTests {
             == .denied("No merge method allowed on this repository."))
     }
 
-    @Test(arguments: ["main", "develop"])
-    func aDirectMergeIntoAProtectedBranchStartsWithAWarning(base: String) throws {
-        let opened = try dialog(openMerge(try mergeablePR(base: base), lastUsed: nil, preferred: .squash))
+    @Test func aDirectMergeIntoMainStartsWithAWarning() throws {
+        let opened = try dialog(openMerge(try mergeablePR(base: "main"), lastUsed: nil, preferred: .squash))
         #expect(opened.stage == .warning)
     }
 
-    @Test func anyOtherBranchGoesStraightToTheChoice() throws {
-        let opened = try dialog(openMerge(try mergeablePR(), lastUsed: nil, preferred: .squash))
+    @Test(arguments: ["develop", "feature/x"])
+    func anyOtherBranchGoesStraightToTheChoice(base: String) throws {
+        let opened = try dialog(openMerge(try mergeablePR(base: base), lastUsed: nil, preferred: .squash))
         #expect(opened.stage == .choosing)
     }
 
@@ -86,12 +86,12 @@ struct MergeDialogTests {
     }
 
     @Test func theWarningIsRedAndNamesTheBranch() throws {
-        let render = mergeRender(try dialog(openMerge(try mergeablePR(base: "develop"), lastUsed: nil, preferred: .squash)))
+        let render = mergeRender(try dialog(openMerge(try mergeablePR(base: "main"), lastUsed: nil, preferred: .squash)))
         #expect(render.title == "WARNING")
         #expect(render.frameTone == .red)
-        #expect(render.lines[1].first == Segment(text: "develop", tone: .red))
-        #expect(texts(render).contains("⚠  DIRECT MERGE INTO DEVELOP  ⚠"))
-        #expect(texts(render).contains("This pull request targets develop. Merging it will land directly on develop."))
+        #expect(render.lines[1].first == Segment(text: "main", tone: .red))
+        #expect(texts(render).contains("⚠  DIRECT MERGE INTO MAIN  ⚠"))
+        #expect(texts(render).contains("This pull request targets main. Merging it will land directly on main."))
         #expect(texts(render).last == "Enter to continue · Esc to cancel")
     }
 

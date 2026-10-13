@@ -262,7 +262,7 @@ final class BarStateTests {
     }
 
     @Test func enterOnTheWarningLeadsToTheChoice() async throws {
-        _ = try await loadMergeable(base: "develop")
+        _ = try await loadMergeable(base: "main")
         await state.press(.m)
         #expect(state.mergeDialog?.stage == .warning)
         await state.press(.enter)
@@ -339,8 +339,7 @@ final class BarStateTests {
         await state.press(.enter)
         #expect(state.openKey?.number == 42)
         await state.press(.m)
-        #expect(state.mergeDialog?.stage == .warning, "le détail enregistré vise develop")
-        await state.press(.enter)
+        #expect(state.mergeDialog?.stage == .choosing, "le détail enregistré vise develop : pas d'avertissement")
         await state.press(.enter)
         #expect(state.openKey == nil)
         #expect(state.mergeDialog == nil)
