@@ -47,6 +47,8 @@ struct PresentationTests {
         #expect(row.repo == "moi/owl")
         #expect(row.number == "#42")
         #expect(row.target == "develop")
+        #expect(row.arrow == "←")
+        #expect(row.source == "feat/fusion")
         #expect(row.title == "Ajoute la fenêtre de fusion")
         #expect(row.age == "2h")
         #expect(row.checks == checksGlyph(.success))
@@ -116,6 +118,8 @@ struct PresentationTests {
         #expect(Palette.number == .gray)
         #expect(Palette.age == .gray)
         #expect(Palette.target == .blue)
+        #expect(Palette.arrow == .gray)
+        #expect(Palette.source == .blue)
         #expect(Palette.connector == .gray)
         #expect(Palette.sectionTitle == .cyan)
     }

@@ -86,15 +86,14 @@ struct RowView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(row.repo)
-                        .foregroundStyle(Palette.repo.color)
+                    Text(row.title)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(.tail)
                     Group {
                         Text(row.number).foregroundStyle(Palette.number.color)
                         Text(row.age).foregroundStyle(Palette.age.color)
-                        Text(row.target).foregroundStyle(Palette.target.color)
                     }
+                    .font(.system(.body, design: .monospaced))
                     .lineLimit(1)
                     .fixedSize()
                     ForEach(row.flags, id: \.self) { flag in
@@ -102,10 +101,20 @@ struct RowView: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .font(.system(.body, design: .monospaced))
-                Text(row.title)
+                HStack(spacing: 6) {
+                    Text(row.target).foregroundStyle(Palette.target.color).fixedSize()
+                    Text(row.arrow).foregroundStyle(Palette.arrow.color).fixedSize()
+                    Text(row.source)
+                        .foregroundStyle(Palette.source.color)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.system(.callout, design: .monospaced))
+                Text(row.repo)
+                    .foregroundStyle(Palette.repo.color)
+                    .font(.system(.callout, design: .monospaced))
                     .lineLimit(1)
-                    .truncationMode(.tail)
+                    .truncationMode(.middle)
                 ForEach(Array(row.checkLines.enumerated()), id: \.offset) { _, line in
                     HStack(spacing: 6) {
                         Text(line.connector).foregroundStyle(Palette.connector.color)

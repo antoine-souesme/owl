@@ -11,6 +11,8 @@ public enum Palette {
     public static let number: Tone = .gray
     public static let age: Tone = .gray
     public static let target: Tone = .blue
+    public static let arrow: Tone = .gray
+    public static let source: Tone = .blue
     public static let connector: Tone = .gray
     public static let sectionTitle: Tone = .cyan
 }
@@ -102,6 +104,9 @@ public struct Row: Equatable, Identifiable, Sendable {
     public let number: String
     public let age: String
     public let target: String
+    /// Flèche de fusion de la TUI, de la branche source vers la cible.
+    public let arrow: String
+    public let source: String
     public let title: String
     public let checks: Glyph
     public let review: Glyph
@@ -123,6 +128,8 @@ public func rows(_ prs: [PullRequest], now: Date, selected: PrKey? = nil) -> [Ro
             number: "#\(pr.number)",
             age: shortAge(from: pr.updatedAt, now: now),
             target: pr.baseRef,
+            arrow: "←",
+            source: pr.headRef,
             title: pr.title,
             checks: checksGlyph(pr.checks),
             review: reviewGlyph(pr.review),
