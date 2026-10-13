@@ -83,6 +83,17 @@ struct RowView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .padding(.leading, 40)
+            ForEach(Array(row.checkLines.enumerated()), id: \.offset) { _, line in
+                HStack(spacing: 6) {
+                    Text(line.connector).foregroundStyle(.secondary)
+                    GlyphView(glyph: line.glyph)
+                    Text(line.name)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .font(.system(.caption, design: .monospaced))
+                .padding(.leading, 40)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

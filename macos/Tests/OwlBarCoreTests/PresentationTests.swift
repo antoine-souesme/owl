@@ -95,4 +95,19 @@ struct PresentationTests {
         #expect(readyTitle == "Ready to merge")
         #expect(readyBody(pr) == "moi/owl #42 · Ajoute la fenêtre de fusion")
     }
+
+    @Test func eachCheckOfTheLastCommitHasItsLineUnderTheRow() throws {
+        let all = rows(try recordedList(), now: now)
+        let row = try #require(all.first { $0.number == "#13" })
+        #expect(row.checkLines == [
+            CheckLine(connector: "⎿", glyph: checksGlyph(.success), name: "build"),
+            CheckLine(connector: "⎿", glyph: checksGlyph(.pending), name: "test"),
+            CheckLine(connector: "⎿", glyph: checksGlyph(.pending), name: "ci/deploy-preview"),
+        ])
+    }
+
+    @Test func aPullRequestWithoutChecksHasNoLineBelow() throws {
+        let row = try #require(rows(recordedList(), now: now).first)
+        #expect(row.checkLines.isEmpty)
+    }
 }

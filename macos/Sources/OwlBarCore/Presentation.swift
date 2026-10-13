@@ -73,6 +73,14 @@ public func menuBarTitle(counter: Counter?, failed: Bool) -> String {
     return "🦉 \(counter.ready) · \(counter.others)"
 }
 
+/// Une vérification du dernier commit, sous la ligne de sa PR, raccordée
+/// comme dans la TUI.
+public struct CheckLine: Equatable, Sendable {
+    public let connector: String
+    public let glyph: Glyph
+    public let name: String
+}
+
 public struct Row: Equatable, Identifiable, Sendable {
     public let id: PrKey
     public let repo: String
@@ -83,6 +91,7 @@ public struct Row: Equatable, Identifiable, Sendable {
     public let checks: Glyph
     public let review: Glyph
     public let flags: [String]
+    public let checkLines: [CheckLine]
 }
 
 public func rows(_ prs: [PullRequest], now: Date) -> [Row] {
@@ -99,7 +108,11 @@ public func rows(_ prs: [PullRequest], now: Date) -> [Row] {
             title: pr.title,
             checks: checksGlyph(pr.checks),
             review: reviewGlyph(pr.review),
-            flags: flags
+            flags: flags,
+            // Toutes les vérifications, dans l'ordre de GitHub.
+            checkLines: pr.checkRuns.map {
+                CheckLine(connector: "⎿", glyph: checksGlyph($0.state), name: $0.name)
+            }
         )
     }
 }
