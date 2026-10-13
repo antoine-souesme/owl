@@ -29,6 +29,9 @@ public final class BarState: ObservableObject {
     @Published public private(set) var openKey: PrKey?
     @Published public private(set) var detail: DetailStatus = .loading
     @Published public private(set) var mergeStatus: MergeStatus = .idle
+    @Published public private(set) var selectedKey: PrKey?
+    /// La fusion de la PR ouverte attend une confirmation.
+    @Published public private(set) var confirmingMerge = false
     public private(set) var preferredMethod: MergeMethod = .squash
     private var refreshInterval = 60
     private var pausedUntil: Date?
@@ -51,7 +54,43 @@ public final class BarState: ObservableObject {
         menuBarTitle(counter: loaded ? counter(pullRequests) : nil, failed: errorMessage != nil)
     }
 
-    public var rows: [Row] { OwlBarCore.rows(pullRequests, now: now()) }
+    public var rows: [Row] { OwlBarCore.rows(pullRequests, now: now(), selected: selectedKey) }
+
+    public func selectNext() { moveSelection(by: 1) }
+
+    public func selectPrevious() { moveSelection(by: -1) }
+
+    /// Déplace la sélection sans sortir de la liste.
+    private func moveSelection(by step: Int) {
+        guard !pullRequests.isEmpty else { return }
+        let current = pullRequests.firstIndex { $0.key == selectedKey } ?? 0
+        let next = min(max(current + step, 0), pullRequests.count - 1)
+        selectedKey = pullRequests[next].key
+    }
+
+    /// Ouvre la PR sélectionnée.
+    public func openSelection() async {
+        guard let selectedKey else { return }
+        await open(selectedKey)
+    }
+
+    /// Touche `m` de la liste : ouvre la PR sélectionnée directement sur la
+    /// confirmation de fusion.
+    public func startMerge() async {
+        guard let selectedKey else { return }
+        await open(selectedKey, confirmingMerge: true)
+    }
+
+    /// Demande la confirmation de fusion de la PR ouverte, si le dépôt
+    /// autorise au moins une méthode.
+    public func requestMerge() {
+        guard openKey != nil, mergeStatus != .running, !mergeOptions.choices.isEmpty else { return }
+        confirmingMerge = true
+    }
+
+    public func cancelMerge() {
+        confirmingMerge = false
+    }
 
     /// « Updated 3m ago », ou « Updating… » pendant une lecture.
     public var refreshLabel: String {
@@ -99,6 +138,11 @@ public final class BarState: ObservableObject {
         switch result {
         case .success(let list):
             pullRequests = list.pullRequests
+            // La sélection suit sa PR ; si elle est sortie de la liste, elle
+            // revient en tête.
+            if !list.pullRequests.contains(where: { $0.key == selectedKey }) {
+                selectedKey = list.pullRequests.first?.key
+            }
             preferredMethod = list.preferredMergeMethod
             refreshInterval = list.refreshInterval
             pausedUntil = nil
@@ -114,10 +158,13 @@ public final class BarState: ObservableObject {
         }
     }
 
-    public func open(_ key: PrKey) async {
+    public func open(_ key: PrKey, confirmingMerge confirm: Bool = false) async {
         openKey = key
+        selectedKey = key
         detail = .loading
         mergeStatus = merging.contains(key) ? .running : .idle
+        confirmingMerge = false
+        if confirm { requestMerge() }
         let result = await runner.run(["detail", key.repo, String(key.number)])
             .flatMap { decodeOwl(PrDetail.self, from: $0) }
         // Retour à la liste ou autre PR ouverte entre-temps : cette réponse
@@ -132,12 +179,14 @@ public final class BarState: ObservableObject {
     public func back() {
         openKey = nil
         mergeStatus = .idle
+        confirmingMerge = false
     }
 
     public func merge(_ method: MergeMethod) async {
         guard let key = openKey, !merging.contains(key) else { return }
         merging.insert(key)
         mergeStatus = .running
+        confirmingMerge = false
         let result = await runner.run(["merge", key.repo, String(key.number), method.rawValue])
             .flatMap { decodeOwl(MergeData.self, from: $0) }
         merging.remove(key)

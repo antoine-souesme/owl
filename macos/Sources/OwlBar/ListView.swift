@@ -22,6 +22,7 @@ struct ListView: View {
                 .keyboardShortcut("r")
             }
             .padding(10)
+            .background(KeyboardShortcuts(state: state))
 
             Divider()
 
@@ -32,6 +33,7 @@ struct ListView: View {
                     .padding()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                ScrollViewReader { scroller in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(state.rows) { row in
@@ -41,9 +43,14 @@ struct ListView: View {
                                 RowView(row: row)
                             }
                             .buttonStyle(.plain)
+                            .id(row.id)
                             Divider()
                         }
                     }
+                }
+                .onChange(of: state.selectedKey) { _, key in
+                    if let key { scroller.scrollTo(key) }
+                }
                 }
             }
 
@@ -67,6 +74,9 @@ struct RowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
+                Text(row.marker)
+                    .foregroundStyle(.cyan)
+                    .frame(width: 14)
                 GlyphView(glyph: row.checks)
                 GlyphView(glyph: row.review)
                 Text(row.repo).foregroundStyle(.cyan)
@@ -82,7 +92,7 @@ struct RowView: View {
             Text(row.title)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .padding(.leading, 40)
+                .padding(.leading, 60)
             ForEach(Array(row.checkLines.enumerated()), id: \.offset) { _, line in
                 HStack(spacing: 6) {
                     Text(line.connector).foregroundStyle(.secondary)
@@ -92,11 +102,36 @@ struct RowView: View {
                         .truncationMode(.tail)
                 }
                 .font(.system(.caption, design: .monospaced))
-                .padding(.leading, 40)
+                .padding(.leading, 60)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
+    }
+}
+
+/// Raccourcis du clavier de la liste, comme dans la TUI : flèches pour la
+/// sélection, Entrée ou → pour ouvrir, `m` pour fusionner. Des boutons
+/// invisibles portent les raccourcis.
+struct KeyboardShortcuts: View {
+    @ObservedObject var state: BarState
+
+    var body: some View {
+        ZStack {
+            Button("") { state.selectPrevious() }
+                .keyboardShortcut(.upArrow, modifiers: [])
+            Button("") { state.selectNext() }
+                .keyboardShortcut(.downArrow, modifiers: [])
+            Button("") { Task { await state.openSelection() } }
+                .keyboardShortcut(.return, modifiers: [])
+            Button("") { Task { await state.openSelection() } }
+                .keyboardShortcut(.rightArrow, modifiers: [])
+            Button("") { Task { await state.startMerge() } }
+                .keyboardShortcut("m", modifiers: [])
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 }

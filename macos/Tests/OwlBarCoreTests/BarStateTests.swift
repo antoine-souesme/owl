@@ -232,4 +232,74 @@ final class BarStateTests {
         #expect(runner.calls.filter { $0.first == "merge" }.count == 1, "une seule fusion à la fois")
         await merging.value
     }
+
+    @Test func theFirstRowIsSelectedAfterTheFirstList() async throws {
+        runner.answers["list"] = try listAnswer()
+        await state.refresh()
+        #expect(state.selectedKey == PrKey(repo: "moi/owl", number: 42))
+        #expect(state.rows.map(\.marker) == ["→", "", "", "", ""])
+    }
+
+    @Test func theArrowsMoveTheSelectionWithinTheList() async throws {
+        runner.answers["list"] = try listAnswer()
+        await state.refresh()
+        state.selectPrevious()
+        #expect(state.selectedKey?.number == 42, "rien au-dessus de la première")
+        state.selectNext()
+        state.selectNext()
+        #expect(state.selectedKey?.number == 13)
+        for _ in 0..<10 { state.selectNext() }
+        #expect(state.selectedKey?.number == 3, "rien sous la dernière")
+    }
+
+    @Test func theSelectionSurvivesARefreshWhileItsPullRequestRemains() async throws {
+        runner.answers["list"] = try listAnswer()
+        await state.refresh()
+        state.selectNext()
+        await state.refresh()
+        #expect(state.selectedKey?.number == 7)
+        runner.answers["list"] = try listWith([try recordedList()[0]])
+        await state.refresh()
+        #expect(state.selectedKey?.number == 42, "PR sortie : retour à la première")
+    }
+
+    @Test func mOpensTheSelectionStraightOnTheMergeConfirmation() async throws {
+        runner.answers["list"] = try listAnswer()
+        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
+        await state.refresh()
+        await state.startMerge()
+        #expect(state.openKey == PrKey(repo: "moi/owl", number: 42))
+        #expect(state.confirmingMerge)
+    }
+
+    @Test func openingAPullRequestDoesNotAskForConfirmation() async throws {
+        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
+        await state.open(PrKey(repo: "moi/owl", number: 42))
+        #expect(!state.confirmingMerge)
+        state.requestMerge()
+        #expect(state.confirmingMerge)
+        state.back()
+        #expect(!state.confirmingMerge)
+    }
+
+    @Test func noConfirmationWithoutAnAllowedMethod() async throws {
+        let pr = try recordedList()[0]
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder.owl.encode(EncodablePR(pr))) as? [String: Any])
+        object["merge_methods"] = [String]()
+        let data: [String: Any] = ["pull_requests": [object], "preferred_merge_method": "squash", "refresh_interval": 60]
+        runner.answers["list"] = .success(try JSONSerialization.data(withJSONObject: ["version": 1, "ok": true, "data": data]))
+        await state.refresh()
+        await state.startMerge()
+        #expect(state.openKey == pr.key)
+        #expect(!state.confirmingMerge)
+    }
+}
+
+extension JSONEncoder {
+    static var owl: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }
 }

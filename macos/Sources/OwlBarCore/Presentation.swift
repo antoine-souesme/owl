@@ -81,8 +81,13 @@ public struct CheckLine: Equatable, Sendable {
     public let name: String
 }
 
+/// Marqueur de la ligne sélectionnée, celui de la TUI.
+public let selectionMarker = "→"
+
 public struct Row: Equatable, Identifiable, Sendable {
     public let id: PrKey
+    /// `selectionMarker` sur la ligne sélectionnée, vide ailleurs.
+    public let marker: String
     public let repo: String
     public let number: String
     public let age: String
@@ -94,13 +99,14 @@ public struct Row: Equatable, Identifiable, Sendable {
     public let checkLines: [CheckLine]
 }
 
-public func rows(_ prs: [PullRequest], now: Date) -> [Row] {
+public func rows(_ prs: [PullRequest], now: Date, selected: PrKey? = nil) -> [Row] {
     prs.map { pr in
         var flags: [String] = []
         if pr.isDraft { flags.append("draft") }
         if pr.mergeable == .conflicting { flags.append("⚠ conflicts") }
         return Row(
             id: pr.key,
+            marker: pr.key == selected ? selectionMarker : "",
             repo: pr.repo,
             number: "#\(pr.number)",
             age: shortAge(from: pr.updatedAt, now: now),
