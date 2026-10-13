@@ -98,8 +98,9 @@ public let selectionMarker = "→"
 
 public struct Row: Equatable, Identifiable, Sendable {
     public let id: PrKey
-    /// `selectionMarker` sur la ligne sélectionnée, vide ailleurs.
-    public let marker: String
+    /// La ligne porte `selectionMarker`. Les autres gardent sa place, vide,
+    /// pour que rien ne bouge quand la sélection change.
+    public let isSelected: Bool
     public let repo: String
     public let number: String
     public let age: String
@@ -123,7 +124,7 @@ public func rows(_ prs: [PullRequest], now: Date, selected: PrKey? = nil) -> [Ro
         if pr.mergeable == .conflicting { flags.append("⚠ conflicts") }
         return Row(
             id: pr.key,
-            marker: pr.key == selected ? selectionMarker : "",
+            isSelected: pr.key == selected,
             repo: pr.repo,
             number: "#\(pr.number)",
             age: shortAge(from: pr.updatedAt, now: now),

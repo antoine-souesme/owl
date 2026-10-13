@@ -237,7 +237,7 @@ final class BarStateTests {
         runner.answers["list"] = try listAnswer()
         await state.refresh()
         #expect(state.selectedKey == PrKey(repo: "moi/owl", number: 42))
-        #expect(state.rows.map(\.marker) == ["→", "", "", "", ""])
+        #expect(state.rows.map(\.isSelected) == [true, false, false, false, false])
     }
 
     @Test func theArrowsMoveTheSelectionWithinTheList() async throws {

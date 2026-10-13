@@ -77,7 +77,8 @@ struct RowView: View {
             // texte s'aligne ainsi sur un même bord, lignes des
             // vérifications comprises.
             HStack(spacing: 6) {
-                Text(row.marker)
+                Text(selectionMarker)
+                    .opacity(row.isSelected ? 1 : 0)
                     .frame(width: 14)
                 GlyphView(glyph: row.checks)
                 GlyphView(glyph: row.review)
