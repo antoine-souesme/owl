@@ -19,7 +19,7 @@ struct ListView: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(state.isRefreshing)
-                .keyboardShortcut("r")
+                .keyboardShortcut("r", modifiers: [])
             }
             .padding(10)
             .background(KeyboardShortcuts(state: state))

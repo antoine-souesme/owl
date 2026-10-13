@@ -58,6 +58,15 @@ struct DetailView: View {
 
             Divider()
             MergeBar(state: state).padding(10)
+                // `r` rafraîchit la liste depuis le détail aussi, comme
+                // dans la TUI.
+                .background(
+                    Button("") { Task { await state.refresh() } }
+                        .keyboardShortcut("r", modifiers: [])
+                        .opacity(0)
+                        .frame(width: 0, height: 0)
+                        .accessibilityHidden(true)
+                )
         }
     }
 }
