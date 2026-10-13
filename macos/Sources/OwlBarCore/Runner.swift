@@ -1,7 +1,9 @@
 // Recherche et lancement de `owl`. C'est le seul endroit de l'app qui lance
-// un processus. Une app ouverte depuis le Finder ne voit pas le PATH du
-// terminal : les dossiers d'installation habituels sont parcourus à la main,
-// puis transmis à `owl` pour qu'il trouve `gh` à son tour.
+// un processus. `owl` voyage dans l'app elle-même, à côté de son exécutable :
+// rien n'a besoin d'être installé dans le terminal, et l'app parle toujours à
+// la version de `owl` construite avec elle. Une app ouverte depuis le Finder
+// ne voit pas le PATH du terminal : les dossiers habituels de Homebrew sont
+// transmis à `owl` pour qu'il trouve `gh`.
 import Foundation
 
 public protocol OwlRunning: Sendable {
@@ -9,31 +11,30 @@ public protocol OwlRunning: Sendable {
     func run(_ arguments: [String]) async -> Result<Data, OwlFailure>
 }
 
-/// Dossiers parcourus, dans l'ordre. `~` désigne le dossier personnel.
-let searchDirectories = ["~/.cargo/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+/// Dossiers où chercher `gh`, placés en tête du PATH de `owl`.
+let ghDirectories = ["/opt/homebrew/bin", "/usr/local/bin"]
 
-private func expanded(_ directory: String, home: String) -> String {
-    directory.hasPrefix("~") ? home + directory.dropFirst() : directory
+/// `owl` rangé à côté de l'exécutable de l'app. Un `owl` installé ailleurs
+/// est ignoré : il pourrait ne pas parler le même format.
+public func locateOwl(executableDirectory: String?, isExecutable: (String) -> Bool) -> String? {
+    guard let executableDirectory else { return nil }
+    let path = executableDirectory + "/owl"
+    return isExecutable(path) ? path : nil
 }
 
-public func locateOwl(home: String, isExecutable: (String) -> Bool) -> String? {
-    searchDirectories
-        .map { expanded($0, home: home) + "/owl" }
-        .first(where: isExecutable)
-}
-
-public func childPath(home: String, inherited: String?) -> String {
-    let own = searchDirectories.map { expanded($0, home: home) }
-    let rest = inherited.map { [$0] } ?? []
-    return (own + rest).joined(separator: ":")
+public func childPath(inherited: String?) -> String {
+    (ghDirectories + (inherited.map { [$0] } ?? [])).joined(separator: ":")
 }
 
 public struct ProcessRunner: OwlRunning {
     public init() {}
 
     public func run(_ arguments: [String]) async -> Result<Data, OwlFailure> {
-        let home = NSHomeDirectory()
-        guard let path = locateOwl(home: home, isExecutable: FileManager.default.isExecutableFile(atPath:)) else {
+        let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent().path
+        guard let path = locateOwl(
+            executableDirectory: executableDirectory,
+            isExecutable: FileManager.default.isExecutableFile(atPath:)
+        ) else {
             return .failure(.notFound)
         }
         // Lecture bloquante hors du fil principal : le panneau reste
@@ -44,7 +45,7 @@ public struct ProcessRunner: OwlRunning {
                 process.executableURL = URL(fileURLWithPath: path)
                 process.arguments = arguments
                 var environment = ProcessInfo.processInfo.environment
-                environment["PATH"] = childPath(home: home, inherited: environment["PATH"])
+                environment["PATH"] = childPath(inherited: environment["PATH"])
                 process.environment = environment
                 let output = Pipe()
                 process.standardOutput = output

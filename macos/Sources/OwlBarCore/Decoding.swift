@@ -21,7 +21,7 @@ public struct OwlFailure: Error, Equatable, Decodable, Sendable {
 
     public static let notFound = OwlFailure(
         kind: "owl_not_found",
-        message: "owl not found. Install it with `cargo install --path .`",
+        message: "owl is missing from the app. Rebuild it with `macos/build.sh`.",
         resetAt: nil
     )
     public static let unsupported = OwlFailure(

@@ -42,6 +42,8 @@ devient : ce qui était déjà prêt au lancement ne déclenche rien.
 ## Dans la barre des menus
 
 Une petite app macOS, `Owl.app`, garde `owl` sous la main hors du terminal.
+Elle est autonome : `owl` est rangé à l'intérieur, rien n'est à installer dans
+le terminal, et `macos/build.sh` la construit et l'installe d'une seule commande.
 Une chouette dans la barre des menus affiche le nombre de PR prêtes à
 fusionner et le nombre des autres. Un clic ouvre un panneau avec la même
 liste ; un clic sur une PR ouvre sa fenêtre de fusion, et un bouton l'ouvre

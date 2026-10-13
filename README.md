@@ -31,6 +31,17 @@ Or run it locally, without installing:
 cargo run
 ```
 
+### Menu bar app (macOS)
+
+A standalone app that lives in the menu bar, with `owl` bundled inside: nothing
+needs to be installed in the terminal. Build, install and launch it in one command:
+
+```bash
+macos/build.sh
+```
+
+It lands in `~/Applications/Owl.app`. Only `gh` is required.
+
 ## Usage
 
 Run `owl` with no arguments. The list of pull requests appears: repository, number,
