@@ -33,6 +33,9 @@ public final class BarState: ObservableObject {
     private var refreshInterval = 60
     private var pausedUntil: Date?
     private var tracker = ReadyTracker()
+    /// Fusions en cours, par PR : l'état affiché ne vaut que pour la PR
+    /// ouverte, même si l'on navigue pendant qu'une fusion tourne.
+    private var merging: Set<PrKey> = []
 
     private let runner: OwlRunning
     private let notifier: Notifying
@@ -114,7 +117,7 @@ public final class BarState: ObservableObject {
     public func open(_ key: PrKey) async {
         openKey = key
         detail = .loading
-        mergeStatus = .idle
+        mergeStatus = merging.contains(key) ? .running : .idle
         let result = await runner.run(["detail", key.repo, String(key.number)])
             .flatMap { decodeOwl(PrDetail.self, from: $0) }
         // Retour à la liste ou autre PR ouverte entre-temps : cette réponse
@@ -132,17 +135,24 @@ public final class BarState: ObservableObject {
     }
 
     public func merge(_ method: MergeMethod) async {
-        guard let key = openKey, mergeStatus != .running else { return }
+        guard let key = openKey, !merging.contains(key) else { return }
+        merging.insert(key)
         mergeStatus = .running
         let result = await runner.run(["merge", key.repo, String(key.number), method.rawValue])
             .flatMap { decodeOwl(MergeData.self, from: $0) }
+        merging.remove(key)
+        // Autre écran entre-temps : le résultat ne concerne plus ce qui est
+        // affiché. La liste est rafraîchie quand même après un succès.
+        let shown = openKey == key
         switch result {
         case .success:
-            mergeStatus = .idle
-            if openKey == key { openKey = nil }
+            if shown {
+                mergeStatus = .idle
+                openKey = nil
+            }
             await refresh()
         case .failure(let failure):
-            mergeStatus = .failed(failure.message)
+            if shown { mergeStatus = .failed(failure.message) }
         }
     }
 }

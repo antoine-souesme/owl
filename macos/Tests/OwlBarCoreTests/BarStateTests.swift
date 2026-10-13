@@ -195,4 +195,41 @@ final class BarStateTests {
         #expect(state.openKey == key)
         #expect(state.mergeStatus == .failed("Base branch was modified. Review and try the merge again."))
     }
+
+    @Test func aLateMergeFailureIsNotShownOnAnotherPullRequest() async throws {
+        let first = PrKey(repo: "moi/owl", number: 42)
+        let other = PrKey(repo: "moi/notes", number: 7)
+        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
+        runner.answers["merge moi/owl 42 squash"] = errorAnswer("api", "Base branch was modified.")
+        await state.open(first)
+        runner.delay = 50_000_000
+        let state = self.state!
+        let merging = Task { await state.merge(.squash) }
+        while runner.calls.last?.first != "merge" { await Task.yield() }
+        state.back()
+        runner.delay = 0
+        await state.open(other)
+        await merging.value
+        #expect(state.openKey == other)
+        #expect(state.mergeStatus == .idle)
+    }
+
+    @Test func comingBackDuringAMergeStillShowsItRunning() async throws {
+        let key = PrKey(repo: "moi/owl", number: 42)
+        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
+        runner.answers["merge moi/owl 42 squash"] = .success(Data(#"{"version":1,"ok":true,"data":{}}"#.utf8))
+        runner.answers["list"] = try listAnswer()
+        await state.open(key)
+        runner.delay = 50_000_000
+        let state = self.state!
+        let merging = Task { await state.merge(.squash) }
+        while runner.calls.last?.first != "merge" { await Task.yield() }
+        state.back()
+        runner.delay = 0
+        await state.open(key)
+        #expect(state.mergeStatus == .running)
+        await state.merge(.squash)
+        #expect(runner.calls.filter { $0.first == "merge" }.count == 1, "une seule fusion à la fois")
+        await merging.value
+    }
 }
