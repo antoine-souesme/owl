@@ -92,8 +92,11 @@ lisible à un seul endroit.
 sous-commande, il passe la main à `cli` et ne touche jamais à l'écran.
 
 `owl detail` et `owl merge` partent d'une clé (`owner/repo` et numéro) et non d'un
-résumé déjà chargé : `github` gagne la capacité d'aller chercher une pull request
-par sa clé seule.
+résumé déjà chargé. Ils relancent d'abord la requête de liste avec les filtres de
+la configuration et y cherchent la clé, puis appellent `github` exactement comme la
+TUI. `github` ne change pas. Une pull request absente de la liste rend l'erreur
+`not_found` : l'app ne montre que des pull requests de la liste, donc ce cas ne
+survient que si la pull request vient d'en sortir.
 
 Le jeton n'apparaît jamais dans le JSON, sur la sortie d'erreur ni dans les
 messages.
