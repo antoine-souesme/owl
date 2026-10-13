@@ -1,6 +1,7 @@
 //! Démarrage de `owl` : réglages, jeton, écran, boucle d'événements.
 
 mod app;
+mod cli;
 mod config;
 mod filter;
 mod github;
@@ -28,6 +29,18 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use crate::app::{App, Command, Event, Key};
 
 fn main() -> ExitCode {
+    // Une sous-commande passe la main à `cli` avant toute autre chose : le
+    // terminal n'est jamais pris, et la sortie reste un document JSON.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match cli::parse(&args) {
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+        Ok(Some(request)) => return cli::run(request),
+        Ok(None) => {}
+    }
+
     // Les erreurs de démarrage sont écrites avant toute prise de contrôle du
     // terminal, donc jamais avalées par l'écran alterné.
     let settings = match config::load() {
