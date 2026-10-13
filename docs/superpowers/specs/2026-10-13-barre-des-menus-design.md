@@ -164,15 +164,19 @@ pour cette version.
 
 ### Trouver `owl` et `gh`
 
-Une app lancée depuis le Finder ne voit pas le `PATH` du terminal. L'app cherche
-`owl` dans `~/.cargo/bin`, `/opt/homebrew/bin` et `/usr/local/bin`, dans cet
-ordre, et le lance avec un `PATH` qui contient ces mêmes dossiers, pour que `owl`
-trouve `gh` à son tour.
+`owl` est rangé dans l'app elle-même, à côté de son exécutable
+(`Owl.app/Contents/MacOS/owl`) : l'app est autonome, rien n'a besoin d'être
+installé dans le terminal, et elle parle toujours à la version de `owl`
+construite avec elle. Un `owl` installé ailleurs est ignoré.
 
-Si `owl` est introuvable, l'icône passe en alerte et le panneau dit « owl not
-found. Install it with `cargo install --path .` ». Si `owl` répond avec une
-version de format inconnue, le panneau dit « This owl version is not supported by
-the menu bar app. Update both. ».
+Une app lancée depuis le Finder ne voit pas le `PATH` du terminal. L'app lance
+`owl` avec un `PATH` qui commence par `/opt/homebrew/bin` et `/usr/local/bin`,
+pour que `owl` trouve `gh`.
+
+Si `owl` manque dans l'app, l'icône passe en alerte et le panneau dit « owl is
+missing from the app. Rebuild it with `macos/build.sh`. ». Si `owl` répond avec
+une version de format inconnue, le panneau dit « This owl version is not
+supported by the menu bar app. Update both. ».
 
 ### Lancement à l'ouverture de session
 
@@ -182,9 +186,9 @@ n'a pas d'icône dans le Dock.
 
 ### Construction et installation
 
-Un paquet Swift sous `macos/`, sans projet Xcode. Un script `macos/build.sh`
-compile l'app, assemble le paquet `Owl.app`, le signe localement et le copie dans
-`~/Applications`. Aucune distribution ni signature de développeur n'est prévue.
+Un paquet Swift sous `macos/`, sans projet Xcode. Une seule commande,
+`macos/build.sh`, compile `owl` et l'app, range `owl` dans le paquet `Owl.app`,
+signe le tout localement, remplace l'app de `~/Applications` et la relance. Aucune distribution ni signature de développeur n'est prévue.
 
 Le script de publication du projet (compétence `release`) n'est pas modifié dans
 cette version.

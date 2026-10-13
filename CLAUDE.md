@@ -23,7 +23,7 @@ L'app de la barre des menus vit dans `macos/` :
 ```bash
 cd macos && swift build --build-system native
 macos/test.sh          # swift test, avec le framework de test des outils en ligne de commande
-macos/build.sh         # construit et installe ~/Applications/Owl.app
+macos/build.sh         # construit owl et l'app, installe et relance ~/Applications/Owl.app
 ```
 
 Les deux premières doivent passer dès qu'un fichier de `macos/` ou de

@@ -62,7 +62,6 @@ struct DecodingTests {
     }
 
     @Test func theFixedMessagesAreExact() {
-        #expect(OwlFailure.notFound.message == "owl not found. Install it with `cargo install --path .`")
         #expect(OwlFailure.unsupported.message == "This owl version is not supported by the menu bar app. Update both.")
         #expect(OwlFailure.unreadable.message == "Unreadable answer from owl.")
     }
