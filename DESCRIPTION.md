@@ -39,6 +39,17 @@ Quand une PR devient fusionnable — GitHub dit que plus rien ne bloque —, `ow
 envoie une notification du système. Une par PR, et seulement au moment où elle le
 devient : ce qui était déjà prêt au lancement ne déclenche rien.
 
+## Dans la barre des menus
+
+Une petite app macOS, `Owl.app`, garde `owl` sous la main hors du terminal.
+Une chouette dans la barre des menus affiche le nombre de PR prêtes à
+fusionner et le nombre des autres. Un clic ouvre un panneau avec la même
+liste ; un clic sur une PR ouvre sa fenêtre de fusion, et un bouton l'ouvre
+sur GitHub. L'app interroge `owl` en coulisses,
+avec les sous-commandes `owl list`, `owl detail` et `owl merge`, qui
+répondent en JSON. Elle se lance à l'ouverture de session et prévient quand
+une PR devient fusionnable.
+
 ## Ce que owl ne fait pas
 
 `owl` ne crée pas de pull request, ne pousse pas de code, ne rédige pas de

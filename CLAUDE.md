@@ -18,6 +18,19 @@ cargo run              # lance la TUI
 Les quatre premières doivent passer avant de considérer un travail terminé. Aucune
 n'est optionnelle.
 
+L'app de la barre des menus vit dans `macos/` :
+
+```bash
+cd macos && swift build --build-system native
+macos/test.sh          # swift test, avec le framework de test des outils en ligne de commande
+macos/build.sh         # construit et installe ~/Applications/Owl.app
+```
+
+Les deux premières doivent passer dès qu'un fichier de `macos/` ou de
+`src/cli/` change. `OWL_UPDATE_FIXTURES=1 cargo test` régénère les exemples
+JSON lus par les tests de l'app. Sur ce Mac, sans Xcode, le système de
+compilation par défaut de Swift échoue : d'où `--build-system native`.
+
 ## Règles d'architecture
 
 Les dépendances entre modules sont à sens unique et strictes :
@@ -28,6 +41,10 @@ Les dépendances entre modules sont à sens unique et strictes :
   commandes que la boucle principale exécute.
 - `ui` lit `app` et dessine. Une fonction de dessin ne modifie jamais l'état et ne
   prend aucune décision.
+- `cli` dépend de `model`, `filter`, `config`, `token` et `github`, jamais de
+  `app` ni `ui`. Son JSON est le contrat de l'app de la barre des menus.
+- Dans `macos/`, `OwlBarCore` décide, `OwlBar` dessine. Une vue ne choisit ni
+  pictogramme, ni texte, ni format.
 
 Une décision qui apparaît dans `ui` — quel pictogramme, quel message, quelle
 troncature — est au mauvais endroit : elle appartient à `app` ou à `model`.
