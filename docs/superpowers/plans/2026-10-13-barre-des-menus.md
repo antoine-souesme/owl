@@ -12,12 +12,13 @@
 
 ## Conditions d'exécution
 
-- Branche de travail : `feature/icone-barre-menus`, déjà créée depuis `develop` et portant la spec. Jamais de travail direct sur `develop`, jamais de pull request vers `main`.
-- La spec et ce plan sont déjà commités sur la branche.
-- Registre `sdd` : créer un registre neuf pour `2026-10-13-barre-des-menus` sous `.superpowers/sdd/`, ne lire ni modifier les registres existants.
-- `docs/suivi/TODO.md` est hors périmètre. Une décision mise de côté et critique pour la suite se consigne dans `docs/suivi/DETTE.md`, au format déjà en place.
-- Aucune question à poser avant de commencer. Une question n'est légitime que devant un blocage réel (outil absent, `swift test` impossible à lancer).
-- À la fin : pull request vers `develop`, puis un rapport court qui dit ce qui reste à vérifier à la main.
+- Le plan compte 7 tâches : exécution **inline** avec `superpowers:executing-plans`, pas en subagent-driven development.
+- Branche de travail : `feature/icone-barre-menus`, déjà créée depuis `develop` et portant la spec et ce plan. Faire `git checkout feature/icone-barre-menus` avant tout. Jamais de travail direct sur `develop`, jamais de pull request vers `main`.
+- Registre `sdd` : repartir de zéro. Créer un registre neuf pour `2026-10-13-barre-des-menus` sous `.superpowers/sdd/` ; ne lire, ne reprendre ni ne modifier aucun registre existant. Le dossier est ignoré par git.
+- Aucune question à poser avant de commencer : tout est dans ce plan et dans la spec. Une question n'est légitime que devant un blocage réel qui empêche la suite (outil absent, `swift test` impossible à lancer, `gh` non connecté).
+- Vérification visuelle (tâche 7, étape 8) : aucun identifiant n'est nécessaire, `gh` est déjà connecté sur ce Mac et `owl` emprunte son jeton. Ne jamais demander à l'humain de se connecter ni de fournir quoi que ce soit. Pour voir l'app, utiliser `screencapture -x <fichier>.png` puis lire l'image ; ce qui ne peut pas être vérifié ainsi (clics dans le panneau) est simplement laissé de côté, sans le signaler.
+- `docs/suivi/TODO.md` est hors périmètre. Une décision **mise de côté** se consigne dans `docs/suivi/DETTE.md`, au format déjà en place, et uniquement si elle est critique pour la suite. Pas les décisions prises, pas les idées d'amélioration, aucune sur-conception.
+- À la fin : pull request vers `develop`, obligatoire, puis le rapport décrit à la tâche 7, étape 9.
 
 ## Global Constraints
 
@@ -2894,7 +2895,7 @@ Expected: PASS.
 
 Run: `cargo install --path . && macos/build.sh && open ~/Applications/Owl.app`
 
-Vérifier à l'œil, et noter chaque point dans le rapport :
+Vérifier à l'œil avec `screencapture`, sans rien demander à l'humain :
 1. La chouette et le compteur apparaissent dans la barre des menus en quelques secondes.
 2. Le clic ouvre le panneau avec la liste ; les colonnes ressemblent à celles de la TUI.
 3. Un clic sur une PR glisse vers le détail ; la flèche retour revient.
@@ -2922,4 +2923,4 @@ EOF
 )"
 ```
 
-Rapport final : le lien de la PR, puis seulement ce qui reste à vérifier à la main ou ce qui n'a pas pu l'être.
+Rapport final : le lien de la PR, puis uniquement la liste, claire et concise, de ce que l'humain doit faire à la main pour que tout marche (par exemple une variable d'environnement à ajouter). Ne pas raconter le travail fait. Ne pas mentionner : les vérifications manuelles, les manipulations git, les relectures de pull request, les réglages à faire dans l'app, ni le contenu de `docs/suivi/DETTE.md`. S'il n'y a rien à faire, le dire en une phrase.
