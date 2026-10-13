@@ -13,7 +13,6 @@ struct DetailView: View {
                     Label("Back", systemImage: "chevron.left")
                 }
                 .buttonStyle(.borderless)
-                .keyboardShortcut(.leftArrow, modifiers: [])
                 Spacer()
                 if let url = state.openPullRequest.flatMap({ URL(string: $0.url) }) {
                     Link("Open on GitHub", destination: url)
@@ -63,15 +62,6 @@ struct DetailView: View {
 
             Divider()
             MergeBar(state: state).padding(10)
-                // `r` rafraîchit la liste depuis le détail aussi, comme
-                // dans la TUI.
-                .background(
-                    Button("") { Task { await state.refresh() } }
-                        .keyboardShortcut("r", modifiers: [])
-                        .opacity(0)
-                        .frame(width: 0, height: 0)
-                        .accessibilityHidden(true)
-                )
         }
     }
 }
@@ -94,54 +84,15 @@ struct LineView: View {
 
 struct MergeBar: View {
     @ObservedObject var state: BarState
-    @StateObject private var form = MergeForm()
 
     var body: some View {
-        let options = state.mergeOptions
-        let method = form.chosen ?? options.selected
-        VStack(alignment: .leading, spacing: 6) {
-            if options.choices.isEmpty {
+        HStack {
+            if state.mergeOptions.choices.isEmpty {
                 Text(noMergeMethodMessage).foregroundStyle(.secondary)
-            } else if state.mergeStatus == .running {
-                ProgressView().controlSize(.small)
-            } else if state.confirmingMerge, let method {
-                HStack {
-                    if options.choices.count > 1 {
-                        Picker("", selection: Binding(
-                            get: { method },
-                            set: { form.chosen = $0 }
-                        )) {
-                            ForEach(options.choices, id: \.self) { choice in
-                                Text(methodLabel(choice)).tag(choice)
-                            }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
-                    }
-                    Button(methodLabel(method)) {
-                        Task { await state.merge(method) }
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    Button("Cancel") { state.cancelMerge() }
-                        .keyboardShortcut(.cancelAction)
-                }
             } else {
-                Button("Merge") { state.requestMerge() }
-                    .keyboardShortcut("m", modifiers: [])
+                Button("Merge") { state.startMerge() }
             }
-            if case .failed(let message) = state.mergeStatus {
-                Text(message).foregroundStyle(.red).textSelection(.enabled)
-            }
-        }
-        .onChange(of: state.openKey) { _, _ in
-            form.chosen = nil
+            Spacer()
         }
     }
-}
-
-/// Méthode choisie dans la barre de fusion, propre à la vue. Un objet plutôt
-/// que `@State` : sans Xcode, la macro de `@State` du SDK de macOS 27 n'a pas
-/// son greffon.
-final class MergeForm: ObservableObject {
-    @Published var chosen: MergeMethod?
 }

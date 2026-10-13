@@ -13,10 +13,10 @@ public enum DetailStatus: Equatable, Sendable {
     case failed(String)
 }
 
-public enum MergeStatus: Equatable, Sendable {
-    case idle
-    case running
-    case failed(String)
+/// Touches du panneau, traitées ici comme `App::handle` les traite dans la
+/// TUI : les vues ne font que les transmettre.
+public enum PanelKey: Sendable {
+    case up, down, left, right, enter, escape, m, r
 }
 
 @MainActor
@@ -28,19 +28,18 @@ public final class BarState: ObservableObject {
     @Published public private(set) var lastRefresh: Date?
     @Published public private(set) var openKey: PrKey?
     @Published public private(set) var detail: DetailStatus = .loading
-    @Published public private(set) var mergeStatus: MergeStatus = .idle
+    @Published public private(set) var mergeDialog: MergeDialog?
+    /// Message bref posé par une action, effacé à la touche suivante.
+    @Published public private(set) var notice: String?
     @Published public private(set) var selectedKey: PrKey?
     /// Image courante de l'animation des vérifications en cours.
     @Published public private(set) var frame = 0
-    /// La fusion de la PR ouverte attend une confirmation.
-    @Published public private(set) var confirmingMerge = false
     public private(set) var preferredMethod: MergeMethod = .squash
     private var refreshInterval = 60
     private var pausedUntil: Date?
     private var tracker = ReadyTracker()
-    /// Fusions en cours, par PR : l'état affiché ne vaut que pour la PR
-    /// ouverte, même si l'on navigue pendant qu'une fusion tourne.
-    private var merging: Set<PrKey> = []
+    /// Méthode de la dernière fusion réussie, présélectionnée ensuite.
+    private var lastUsedMethod: MergeMethod?
 
     private let runner: OwlRunning
     private let notifier: Notifying
@@ -76,9 +75,15 @@ public final class BarState: ObservableObject {
         if isAnimating { frame += 1 }
     }
 
-    public func selectNext() { moveSelection(by: 1) }
+    public func selectNext() {
+        notice = nil
+        moveSelection(by: 1)
+    }
 
-    public func selectPrevious() { moveSelection(by: -1) }
+    public func selectPrevious() {
+        notice = nil
+        moveSelection(by: -1)
+    }
 
     /// Déplace la sélection sans sortir de la liste.
     private func moveSelection(by step: Int) {
@@ -94,22 +99,116 @@ public final class BarState: ObservableObject {
         await open(selectedKey)
     }
 
-    /// Touche `m` de la liste : ouvre la PR sélectionnée directement sur la
-    /// confirmation de fusion.
-    public func startMerge() async {
-        guard let selectedKey else { return }
-        await open(selectedKey, confirmingMerge: true)
+    public var mergeRendering: MergeRender? { mergeDialog.map(mergeRender) }
+
+    /// Touche `m` : ouvre la fenêtre de fusion pour la PR affichée, celle du
+    /// détail ou la sélection de la liste.
+    public func startMerge() {
+        notice = nil
+        guard let key = openKey ?? selectedKey,
+              let pr = (openKey == key ? openPullRequest : nil) ?? pullRequests.first(where: { $0.key == key })
+        else { return }
+        switch openMerge(pr, lastUsed: lastUsedMethod, preferred: preferredMethod) {
+        case .dialog(let dialog): mergeDialog = dialog
+        case .denied(let message): notice = message
+        }
     }
 
-    /// Demande la confirmation de fusion de la PR ouverte, si le dépôt
-    /// autorise au moins une méthode.
-    public func requestMerge() {
-        guard openKey != nil, mergeStatus != .running, !mergeOptions.choices.isEmpty else { return }
-        confirmingMerge = true
-    }
-
+    /// Échap : ferme la fenêtre, sauf pendant la fusion, qui est partie.
     public func cancelMerge() {
-        confirmingMerge = false
+        guard let dialog = mergeDialog, dialog.stage != .submitting else { return }
+        mergeDialog = nil
+    }
+
+    /// Entrée dans la fenêtre : passe l'avertissement, ou lance la fusion.
+    public func confirmMerge() async {
+        guard var dialog = mergeDialog else { return }
+        switch dialog.stage {
+        case .warning:
+            dialog.stage = .choosing
+            mergeDialog = dialog
+        case .choosing, .failed:
+            await submit(dialog)
+        case .submitting:
+            break
+        }
+    }
+
+    public func selectMethod(_ index: Int) {
+        guard var dialog = mergeDialog, dialog.stage == .choosing,
+              dialog.choices.indices.contains(index), dialog.choices[index].allowed
+        else { return }
+        dialog.selected = index
+        mergeDialog = dialog
+    }
+
+    private func submit(_ dialog: MergeDialog) async {
+        guard let method = dialog.method else { return }
+        var running = dialog
+        running.stage = .submitting
+        mergeDialog = running
+        let key = dialog.key
+        let result = await runner.run(["merge", key.repo, String(key.number), method.rawValue])
+            .flatMap { decodeOwl(MergeData.self, from: $0) }
+        guard mergeDialog?.key == key else { return }
+        switch result {
+        case .success:
+            lastUsedMethod = method
+            mergeDialog = nil
+            notice = "\(key.repo) #\(key.number) merged"
+            // La PR fusionnée quitte la liste sans attendre la relecture,
+            // comme dans la TUI.
+            pullRequests.removeAll { $0.key == key }
+            if !pullRequests.contains(where: { $0.key == selectedKey }) {
+                selectedKey = pullRequests.first?.key
+            }
+            if openKey == key { openKey = nil }
+            await refresh()
+        case .failure(let failure):
+            running.stage = .failed(failure.message)
+            mergeDialog = running
+        }
+    }
+
+    /// Aiguille une touche, comme la TUI : la fenêtre de fusion d'abord,
+    /// puis les touches communes, puis celles de la vue affichée.
+    public func press(_ key: PanelKey) async {
+        if var dialog = mergeDialog {
+            switch key {
+            case .up, .down:
+                if dialog.stage == .choosing {
+                    dialog.move(down: key == .down)
+                    mergeDialog = dialog
+                }
+            case .enter: await confirmMerge()
+            case .escape: cancelMerge()
+            default: break
+            }
+            return
+        }
+        switch key {
+        case .r:
+            notice = nil
+            await refresh()
+            return
+        case .m:
+            startMerge()
+            return
+        default: break
+        }
+        if openKey != nil {
+            switch key {
+            case .left, .escape: back()
+            default: break
+            }
+        } else {
+            switch key {
+            case .up: selectPrevious()
+            case .down: selectNext()
+            case .enter, .right: await openSelection()
+            default: break
+            }
+        }
     }
 
     /// « Updated 3m ago », ou « Updating… » pendant une lecture.
@@ -178,13 +277,11 @@ public final class BarState: ObservableObject {
         }
     }
 
-    public func open(_ key: PrKey, confirmingMerge confirm: Bool = false) async {
+    public func open(_ key: PrKey) async {
+        notice = nil
         openKey = key
         selectedKey = key
         detail = .loading
-        mergeStatus = merging.contains(key) ? .running : .idle
-        confirmingMerge = false
-        if confirm { requestMerge() }
         let result = await runner.run(["detail", key.repo, String(key.number)])
             .flatMap { decodeOwl(PrDetail.self, from: $0) }
         // Retour à la liste ou autre PR ouverte entre-temps : cette réponse
@@ -197,31 +294,7 @@ public final class BarState: ObservableObject {
     }
 
     public func back() {
+        notice = nil
         openKey = nil
-        mergeStatus = .idle
-        confirmingMerge = false
-    }
-
-    public func merge(_ method: MergeMethod) async {
-        guard let key = openKey, !merging.contains(key) else { return }
-        merging.insert(key)
-        mergeStatus = .running
-        confirmingMerge = false
-        let result = await runner.run(["merge", key.repo, String(key.number), method.rawValue])
-            .flatMap { decodeOwl(MergeData.self, from: $0) }
-        merging.remove(key)
-        // Autre écran entre-temps : le résultat ne concerne plus ce qui est
-        // affiché. La liste est rafraîchie quand même après un succès.
-        let shown = openKey == key
-        switch result {
-        case .success:
-            if shown {
-                mergeStatus = .idle
-                openKey = nil
-            }
-            await refresh()
-        case .failure(let failure):
-            if shown { mergeStatus = .failed(failure.message) }
-        }
     }
 }

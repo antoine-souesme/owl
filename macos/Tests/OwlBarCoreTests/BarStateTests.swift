@@ -174,65 +174,6 @@ final class BarStateTests {
         #expect(state.detail == .failed("Pull request not found."))
     }
 
-    @Test func aMergeSuccessGoesBackToAFreshList() async throws {
-        let key = PrKey(repo: "moi/owl", number: 42)
-        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
-        runner.answers["merge moi/owl 42 squash"] = .success(Data(#"{"version":1,"ok":true,"data":{}}"#.utf8))
-        runner.answers["list"] = try listAnswer()
-        await state.open(key)
-        await state.merge(.squash)
-        #expect(state.openKey == nil)
-        #expect(state.mergeStatus == .idle)
-        #expect(runner.calls.last == ["list"])
-    }
-
-    @Test func aMergeFailureShowsGithubsMessageVerbatim() async throws {
-        let key = PrKey(repo: "moi/owl", number: 42)
-        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
-        runner.answers["merge moi/owl 42 rebase"] = errorAnswer("api", "Base branch was modified. Review and try the merge again.")
-        await state.open(key)
-        await state.merge(.rebase)
-        #expect(state.openKey == key)
-        #expect(state.mergeStatus == .failed("Base branch was modified. Review and try the merge again."))
-    }
-
-    @Test func aLateMergeFailureIsNotShownOnAnotherPullRequest() async throws {
-        let first = PrKey(repo: "moi/owl", number: 42)
-        let other = PrKey(repo: "moi/notes", number: 7)
-        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
-        runner.answers["merge moi/owl 42 squash"] = errorAnswer("api", "Base branch was modified.")
-        await state.open(first)
-        runner.delay = 50_000_000
-        let state = self.state!
-        let merging = Task { await state.merge(.squash) }
-        while runner.calls.last?.first != "merge" { await Task.yield() }
-        state.back()
-        runner.delay = 0
-        await state.open(other)
-        await merging.value
-        #expect(state.openKey == other)
-        #expect(state.mergeStatus == .idle)
-    }
-
-    @Test func comingBackDuringAMergeStillShowsItRunning() async throws {
-        let key = PrKey(repo: "moi/owl", number: 42)
-        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
-        runner.answers["merge moi/owl 42 squash"] = .success(Data(#"{"version":1,"ok":true,"data":{}}"#.utf8))
-        runner.answers["list"] = try listAnswer()
-        await state.open(key)
-        runner.delay = 50_000_000
-        let state = self.state!
-        let merging = Task { await state.merge(.squash) }
-        while runner.calls.last?.first != "merge" { await Task.yield() }
-        state.back()
-        runner.delay = 0
-        await state.open(key)
-        #expect(state.mergeStatus == .running)
-        await state.merge(.squash)
-        #expect(runner.calls.filter { $0.first == "merge" }.count == 1, "une seule fusion à la fois")
-        await merging.value
-    }
-
     @Test func theFirstRowIsSelectedAfterTheFirstList() async throws {
         runner.answers["list"] = try listAnswer()
         await state.refresh()
@@ -263,37 +204,6 @@ final class BarStateTests {
         #expect(state.selectedKey?.number == 42, "PR sortie : retour à la première")
     }
 
-    @Test func mOpensTheSelectionStraightOnTheMergeConfirmation() async throws {
-        runner.answers["list"] = try listAnswer()
-        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
-        await state.refresh()
-        await state.startMerge()
-        #expect(state.openKey == PrKey(repo: "moi/owl", number: 42))
-        #expect(state.confirmingMerge)
-    }
-
-    @Test func openingAPullRequestDoesNotAskForConfirmation() async throws {
-        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
-        await state.open(PrKey(repo: "moi/owl", number: 42))
-        #expect(!state.confirmingMerge)
-        state.requestMerge()
-        #expect(state.confirmingMerge)
-        state.back()
-        #expect(!state.confirmingMerge)
-    }
-
-    @Test func noConfirmationWithoutAnAllowedMethod() async throws {
-        let pr = try recordedList()[0]
-        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder.owl.encode(EncodablePR(pr))) as? [String: Any])
-        object["merge_methods"] = [String]()
-        let data: [String: Any] = ["pull_requests": [object], "preferred_merge_method": "squash", "refresh_interval": 60]
-        runner.answers["list"] = .success(try JSONSerialization.data(withJSONObject: ["version": 1, "ok": true, "data": data]))
-        await state.refresh()
-        await state.startMerge()
-        #expect(state.openKey == pr.key)
-        #expect(!state.confirmingMerge)
-    }
-
     @Test func aTickTurnsTheRunningChecks() async throws {
         runner.answers["list"] = try listAnswer()
         await state.refresh()
@@ -318,6 +228,139 @@ final class BarStateTests {
         state.tick()
         let checks = try #require(state.detailSectionList.first { $0.title == "Checks" })
         #expect(checks.lines[1].glyph?.symbol == "⠙")
+    }
+
+    // MARK: fenêtre de fusion
+
+    let mergeOk: Result<Data, OwlFailure> = .success(Data(#"{"version":1,"ok":true,"data":{}}"#.utf8))
+
+    /// Liste d'une seule PR fusionnable, sur une branche sans avertissement.
+    func loadMergeable(base: String = "feature/x") async throws -> PullRequest {
+        let pr = try mergeablePR(base: base)
+        runner.answers["list"] = try listWith([pr])
+        await state.refresh()
+        return pr
+    }
+
+    @Test func mOpensTheMergeWindowWithoutOpeningTheDetail() async throws {
+        _ = try await loadMergeable()
+        await state.press(.m)
+        #expect(state.openKey == nil)
+        #expect(state.mergeDialog?.stage == .choosing)
+        #expect(state.mergeRendering?.title == "Merge")
+    }
+
+    @Test func mOnADraftShowsWhyAndOpensNothing() async throws {
+        runner.answers["list"] = try listAnswer()
+        await state.refresh()
+        state.selectNext()
+        await state.press(.m)
+        #expect(state.mergeDialog == nil)
+        #expect(state.notice == "This pull request is a draft, it must be published first.")
+        state.selectNext()
+        #expect(state.notice == nil, "le message ne survit pas à la touche suivante")
+    }
+
+    @Test func enterOnTheWarningLeadsToTheChoice() async throws {
+        _ = try await loadMergeable(base: "develop")
+        await state.press(.m)
+        #expect(state.mergeDialog?.stage == .warning)
+        await state.press(.enter)
+        #expect(state.mergeDialog?.stage == .choosing)
+        #expect(!runner.calls.contains { $0.first == "merge" })
+    }
+
+    @Test func arrowsChooseTheMethodAndEnterMerges() async throws {
+        let pr = try await loadMergeable()
+        runner.answers["merge moi/owl 42 rebase"] = mergeOk
+        runner.answers["list"] = try listWith([])
+        await state.press(.m)
+        await state.press(.down)
+        await state.press(.enter)
+        #expect(runner.calls.contains(["merge", "moi/owl", "42", "rebase"]))
+        #expect(state.mergeDialog == nil)
+        #expect(state.notice == "moi/owl #42 merged")
+        #expect(!state.pullRequests.contains { $0.key == pr.key })
+        #expect(runner.calls.last == ["list"])
+    }
+
+    @Test func theMethodJustUsedIsPreselectedNextTime() async throws {
+        _ = try await loadMergeable()
+        runner.answers["merge moi/owl 42 rebase"] = mergeOk
+        await state.press(.m)
+        await state.press(.down)
+        await state.press(.enter)
+        _ = try await loadMergeable()
+        await state.press(.m)
+        #expect(state.mergeDialog?.method == .rebase)
+    }
+
+    @Test func aFailureStaysInTheWindowVerbatimAndEnterRetries() async throws {
+        _ = try await loadMergeable()
+        runner.answers["merge moi/owl 42 squash"] = errorAnswer("api", "Base branch was modified. Review and try the merge again.")
+        await state.press(.m)
+        await state.press(.enter)
+        #expect(state.mergeDialog?.stage == .failed("Base branch was modified. Review and try the merge again."))
+        runner.answers["merge moi/owl 42 squash"] = mergeOk
+        await state.press(.enter)
+        #expect(state.mergeDialog == nil)
+        #expect(runner.calls.filter { $0.first == "merge" }.count == 2)
+    }
+
+    @Test func escapeClosesTheWindowButNotWhileMerging() async throws {
+        _ = try await loadMergeable()
+        await state.press(.m)
+        await state.press(.escape)
+        #expect(state.mergeDialog == nil)
+
+        runner.answers["merge moi/owl 42 squash"] = mergeOk
+        await state.press(.m)
+        runner.delay = 50_000_000
+        let state = self.state!
+        let merging = Task { await state.press(.enter) }
+        while runner.calls.last?.first != "merge" { await Task.yield() }
+        await state.press(.escape)
+        #expect(state.mergeDialog?.stage == .submitting, "la fusion est partie")
+        await merging.value
+    }
+
+    @Test func whileTheWindowIsOpenTheArrowsDoNotMoveTheList() async throws {
+        runner.answers["list"] = try listWith([try mergeablePR(), try recordedList()[1]])
+        await state.refresh()
+        await state.press(.m)
+        await state.press(.down)
+        #expect(state.selectedKey?.number == 42)
+    }
+
+    @Test func mergingFromTheDetailGoesBackToTheList() async throws {
+        _ = try await loadMergeable()
+        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
+        runner.answers["merge moi/owl 42 squash"] = mergeOk
+        await state.press(.enter)
+        #expect(state.openKey?.number == 42)
+        await state.press(.m)
+        #expect(state.mergeDialog?.stage == .warning, "le détail enregistré vise develop")
+        await state.press(.enter)
+        await state.press(.enter)
+        #expect(state.openKey == nil)
+        #expect(state.mergeDialog == nil)
+    }
+
+    @Test func theKeysOfTheListAndOfTheDetail() async throws {
+        runner.answers["list"] = try listAnswer()
+        runner.answers["detail moi/owl 7"] = errorAnswer("not_found", "Pull request not found.")
+        await state.press(.r)
+        #expect(state.pullRequests.count == 5)
+        await state.press(.down)
+        await state.press(.up)
+        await state.press(.down)
+        await state.press(.right)
+        #expect(state.openKey?.number == 7)
+        await state.press(.left)
+        #expect(state.openKey == nil)
+        await state.press(.enter)
+        await state.press(.escape)
+        #expect(state.openKey == nil)
     }
 }
 

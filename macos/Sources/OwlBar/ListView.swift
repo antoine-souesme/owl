@@ -19,10 +19,8 @@ struct ListView: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(state.isRefreshing)
-                .keyboardShortcut("r", modifiers: [])
             }
             .padding(10)
-            .background(KeyboardShortcuts(state: state))
 
             Divider()
 
@@ -132,30 +130,5 @@ struct RowView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
-    }
-}
-
-/// Raccourcis du clavier de la liste, comme dans la TUI : flèches pour la
-/// sélection, Entrée ou → pour ouvrir, `m` pour fusionner. Des boutons
-/// invisibles portent les raccourcis.
-struct KeyboardShortcuts: View {
-    @ObservedObject var state: BarState
-
-    var body: some View {
-        ZStack {
-            Button("") { state.selectPrevious() }
-                .keyboardShortcut(.upArrow, modifiers: [])
-            Button("") { state.selectNext() }
-                .keyboardShortcut(.downArrow, modifiers: [])
-            Button("") { Task { await state.openSelection() } }
-                .keyboardShortcut(.return, modifiers: [])
-            Button("") { Task { await state.openSelection() } }
-                .keyboardShortcut(.rightArrow, modifiers: [])
-            Button("") { Task { await state.startMerge() } }
-                .keyboardShortcut("m", modifiers: [])
-        }
-        .opacity(0)
-        .frame(width: 0, height: 0)
-        .accessibilityHidden(true)
     }
 }
