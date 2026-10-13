@@ -72,37 +72,51 @@ struct RowView: View {
     let row: Row
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            // Colonne fixe : flèche de sélection et pictogrammes. Tout le
+            // texte s'aligne ainsi sur un même bord, lignes des
+            // vérifications comprises.
             HStack(spacing: 6) {
                 Text(row.marker)
                     .foregroundStyle(.cyan)
                     .frame(width: 14)
                 GlyphView(glyph: row.checks)
                 GlyphView(glyph: row.review)
-                Text(row.repo).foregroundStyle(.cyan)
-                Text(row.number).foregroundStyle(.secondary)
-                Text(row.age).foregroundStyle(.secondary)
-                Text(row.target).foregroundStyle(.purple)
-                ForEach(row.flags, id: \.self) { flag in
-                    Text(flag).font(.caption).foregroundStyle(.orange)
-                }
-                Spacer()
             }
             .font(.system(.body, design: .monospaced))
-            Text(row.title)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .padding(.leading, 60)
-            ForEach(Array(row.checkLines.enumerated()), id: \.offset) { _, line in
+
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(line.connector).foregroundStyle(.secondary)
-                    GlyphView(glyph: line.glyph)
-                    Text(line.name)
+                    Text(row.repo)
+                        .foregroundStyle(.cyan)
                         .lineLimit(1)
-                        .truncationMode(.tail)
+                        .truncationMode(.middle)
+                    Group {
+                        Text(row.number).foregroundStyle(.secondary)
+                        Text(row.age).foregroundStyle(.secondary)
+                        Text(row.target).foregroundStyle(.purple)
+                    }
+                    .lineLimit(1)
+                    .fixedSize()
+                    ForEach(row.flags, id: \.self) { flag in
+                        Text(flag).font(.caption).foregroundStyle(.orange).fixedSize()
+                    }
+                    Spacer(minLength: 0)
                 }
-                .font(.system(.caption, design: .monospaced))
-                .padding(.leading, 60)
+                .font(.system(.body, design: .monospaced))
+                Text(row.title)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                ForEach(Array(row.checkLines.enumerated()), id: \.offset) { _, line in
+                    HStack(spacing: 6) {
+                        Text(line.connector).foregroundStyle(.secondary)
+                        GlyphView(glyph: line.glyph)
+                        Text(line.name)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .font(.system(.caption, design: .monospaced))
+                }
             }
         }
         .padding(.horizontal, 10)
