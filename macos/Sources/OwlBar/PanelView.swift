@@ -26,6 +26,8 @@ extension Tone {
         case .red: .red
         case .yellow: .yellow
         case .gray: .secondary
+        case .cyan: .cyan
+        case .blue: .blue
         }
     }
 }

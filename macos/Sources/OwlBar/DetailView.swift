@@ -45,7 +45,7 @@ struct DetailView: View {
                         }
                         ForEach(state.detailSectionList, id: \.title) { section in
                             if !section.lines.isEmpty {
-                                Text(section.title).font(.headline)
+                                Text(section.title).font(.headline).foregroundStyle(Palette.sectionTitle.color)
                                 ForEach(Array(section.lines.enumerated()), id: \.offset) { _, line in
                                     LineView(line: line)
                                 }

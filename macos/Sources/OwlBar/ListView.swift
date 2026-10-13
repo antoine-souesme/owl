@@ -78,7 +78,6 @@ struct RowView: View {
             // vérifications comprises.
             HStack(spacing: 6) {
                 Text(row.marker)
-                    .foregroundStyle(.cyan)
                     .frame(width: 14)
                 GlyphView(glyph: row.checks)
                 GlyphView(glyph: row.review)
@@ -88,18 +87,18 @@ struct RowView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(row.repo)
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(Palette.repo.color)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Group {
-                        Text(row.number).foregroundStyle(.secondary)
-                        Text(row.age).foregroundStyle(.secondary)
-                        Text(row.target).foregroundStyle(.purple)
+                        Text(row.number).foregroundStyle(Palette.number.color)
+                        Text(row.age).foregroundStyle(Palette.age.color)
+                        Text(row.target).foregroundStyle(Palette.target.color)
                     }
                     .lineLimit(1)
                     .fixedSize()
                     ForEach(row.flags, id: \.self) { flag in
-                        Text(flag).font(.caption).foregroundStyle(.orange).fixedSize()
+                        Text(flag).font(.caption).fixedSize()
                     }
                     Spacer(minLength: 0)
                 }
@@ -109,7 +108,7 @@ struct RowView: View {
                     .truncationMode(.tail)
                 ForEach(Array(row.checkLines.enumerated()), id: \.offset) { _, line in
                     HStack(spacing: 6) {
-                        Text(line.connector).foregroundStyle(.secondary)
+                        Text(line.connector).foregroundStyle(Palette.connector.color)
                         GlyphView(glyph: line.glyph)
                         Text(line.name)
                             .lineLimit(1)
@@ -119,6 +118,7 @@ struct RowView: View {
                 }
             }
         }
+        .opacity(row.dim ? 0.5 : 1)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .contentShape(Rectangle())

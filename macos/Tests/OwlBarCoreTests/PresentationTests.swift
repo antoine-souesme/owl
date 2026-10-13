@@ -110,4 +110,19 @@ struct PresentationTests {
         let row = try #require(rows(recordedList(), now: now).first)
         #expect(row.checkLines.isEmpty)
     }
+
+    @Test func theColumnsKeepTheColoursOfTheTui() {
+        #expect(Palette.repo == .cyan)
+        #expect(Palette.number == .gray)
+        #expect(Palette.age == .gray)
+        #expect(Palette.target == .blue)
+        #expect(Palette.connector == .gray)
+        #expect(Palette.sectionTitle == .cyan)
+    }
+
+    @Test func aDraftRowIsDimmedLikeInTheTui() throws {
+        let all = rows(try recordedList(), now: now)
+        #expect(all.first { $0.number == "#7" }?.dim == true)
+        #expect(all.first { $0.number == "#42" }?.dim == false)
+    }
 }

@@ -3,7 +3,17 @@
 // TUI (`src/app/render.rs`) pour qu'on retrouve les mêmes repères.
 import Foundation
 
-public enum Tone: Sendable { case green, red, yellow, gray }
+public enum Tone: Sendable { case green, red, yellow, gray, cyan, blue }
+
+/// Couleurs des colonnes, celles de la TUI (`src/app/render.rs`).
+public enum Palette {
+    public static let repo: Tone = .cyan
+    public static let number: Tone = .gray
+    public static let age: Tone = .gray
+    public static let target: Tone = .blue
+    public static let connector: Tone = .gray
+    public static let sectionTitle: Tone = .cyan
+}
 
 public struct Glyph: Equatable, Sendable {
     public let symbol: String
@@ -97,6 +107,8 @@ public struct Row: Equatable, Identifiable, Sendable {
     public let review: Glyph
     public let flags: [String]
     public let checkLines: [CheckLine]
+    /// Brouillon : toute la ligne est grisée, comme dans la TUI.
+    public let dim: Bool
 }
 
 public func rows(_ prs: [PullRequest], now: Date, selected: PrKey? = nil) -> [Row] {
@@ -118,7 +130,8 @@ public func rows(_ prs: [PullRequest], now: Date, selected: PrKey? = nil) -> [Ro
             // Toutes les vérifications, dans l'ordre de GitHub.
             checkLines: pr.checkRuns.map {
                 CheckLine(connector: "⎿", glyph: checksGlyph($0.state), name: $0.name)
-            }
+            },
+            dim: pr.isDraft
         )
     }
 }
