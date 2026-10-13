@@ -3,6 +3,10 @@
 **/*.rs.bk
 *.pdb
 
+# App de la barre des menus
+/macos/.build/
+/macos/build/
+
 # macOS
 .DS_Store
 

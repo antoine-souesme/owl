@@ -1,0 +1,128 @@
+{
+  "data": {
+    "preferred_merge_method": "squash",
+    "pull_requests": [
+      {
+        "author": "moi",
+        "base_ref": "develop",
+        "check_runs": [],
+        "checks": "success",
+        "head_ref": "feat/fusion",
+        "is_draft": false,
+        "merge_methods": [
+          "squash",
+          "rebase"
+        ],
+        "merge_state": "clean",
+        "mergeable": "mergeable",
+        "number": 42,
+        "repo": "moi/owl",
+        "review": "approved",
+        "title": "Ajoute la fenêtre de fusion",
+        "updated_at": "2026-08-30T09:12:44Z",
+        "url": "https://github.com/moi/owl/pull/42"
+      },
+      {
+        "author": "inconnu",
+        "base_ref": "main",
+        "check_runs": [],
+        "checks": "none",
+        "head_ref": "brouillon",
+        "is_draft": true,
+        "merge_methods": [
+          "merge"
+        ],
+        "merge_state": "blocked",
+        "mergeable": "unknown",
+        "number": 7,
+        "repo": "moi/notes",
+        "review": "none",
+        "title": "Brouillon sans intégration continue",
+        "updated_at": "2026-08-29T18:03:00Z",
+        "url": "https://github.com/moi/notes/pull/7"
+      },
+      {
+        "author": "camille",
+        "base_ref": "main",
+        "check_runs": [
+          {
+            "name": "build",
+            "state": "success",
+            "url": null
+          },
+          {
+            "name": "test",
+            "state": "pending",
+            "url": null
+          },
+          {
+            "name": "ci/deploy-preview",
+            "state": "pending",
+            "url": null
+          }
+        ],
+        "checks": "pending",
+        "head_ref": "fix/troncature",
+        "is_draft": false,
+        "merge_methods": [
+          "merge",
+          "squash"
+        ],
+        "merge_state": "blocked",
+        "mergeable": "conflicting",
+        "number": 13,
+        "repo": "uneorg/site",
+        "review": "changes_requested",
+        "title": "Corrige la troncature des titres",
+        "updated_at": "2026-08-28T07:45:10Z",
+        "url": "https://github.com/uneorg/site/pull/13"
+      },
+      {
+        "author": "moi",
+        "base_ref": "develop",
+        "check_runs": [],
+        "checks": "failure",
+        "head_ref": "chore/ratatui-0.30",
+        "is_draft": false,
+        "merge_methods": [
+          "squash",
+          "rebase"
+        ],
+        "merge_state": "unknown",
+        "mergeable": "mergeable",
+        "number": 99,
+        "repo": "moi/owl",
+        "review": "review_required",
+        "title": "Migre vers ratatui 0.30",
+        "updated_at": "2026-08-27T22:00:00Z",
+        "url": "https://github.com/moi/owl/pull/99"
+      },
+      {
+        "author": "moi",
+        "base_ref": "",
+        "check_runs": [],
+        "checks": "none",
+        "head_ref": "",
+        "is_draft": false,
+        "merge_methods": [
+          "merge"
+        ],
+        "merge_state": "unknown",
+        "mergeable": "mergeable",
+        "number": 3,
+        "repo": "moi/notes",
+        "review": "none",
+        "title": "Dépôt sans intégration continue configurée",
+        "updated_at": "2026-08-26T11:20:00Z",
+        "url": "https://github.com/moi/notes/pull/3"
+      }
+    ],
+    "rate_limit": {
+      "remaining": 4987,
+      "reset_at": "2026-08-30T10:00:00Z"
+    },
+    "refresh_interval": 60
+  },
+  "ok": true,
+  "version": 1
+}
