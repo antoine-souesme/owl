@@ -10,19 +10,24 @@ struct DetailView: View {
                 Button {
                     state.back()
                 } label: {
-                    Image(systemName: "chevron.left")
+                    Label("Back", systemImage: "chevron.left")
                 }
                 .buttonStyle(.borderless)
                 .keyboardShortcut(.leftArrow, modifiers: [])
-                Text(state.openPullRequest?.title ?? "")
-                    .font(.headline)
-                    .lineLimit(2)
                 Spacer()
                 if let url = state.openPullRequest.flatMap({ URL(string: $0.url) }) {
                     Link("Open on GitHub", destination: url)
                 }
             }
-            .padding(10)
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+
+            // Le titre reste en place, hors de la zone qui défile.
+            Text(state.openPullRequest?.title ?? "")
+                .font(.headline)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
 
             Divider()
 
