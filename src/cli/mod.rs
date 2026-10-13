@@ -2,6 +2,8 @@
 //! menus. Chacune écrit un seul document JSON et se termine ; l'écran n'est
 //! jamais pris.
 
+mod output;
+
 use std::fmt;
 use std::process::ExitCode;
 
