@@ -6,16 +6,7 @@ struct PanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Group {
-                if state.openKey != nil {
-                    DetailView(state: state)
-                        .transition(.move(edge: .trailing))
-                } else {
-                    ListView(state: state)
-                        .transition(.move(edge: .leading))
-                }
-            }
-            .animation(.easeInOut(duration: 0.2), value: state.openKey)
+            ListView(state: state)
             if let notice = state.notice {
                 Divider()
                 Text(notice)
@@ -46,11 +37,10 @@ struct PanelKeys: View {
         ZStack {
             key(.upArrow, .up)
             key(.downArrow, .down)
-            key(.leftArrow, .left)
-            key(.rightArrow, .right)
             key(.return, .enter)
             key(.escape, .escape)
             key("m", .m)
+            key("o", .o)
             key("r", .r)
         }
         .opacity(0)

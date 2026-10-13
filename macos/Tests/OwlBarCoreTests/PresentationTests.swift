@@ -65,17 +65,6 @@ struct PresentationTests {
         }
     }
 
-    @Test func onlyAllowedMethodsAreOfferedInOrder() throws {
-        let pr = try recordedList()[0]
-        #expect(mergeChoices(pr) == [.squash, .rebase])
-    }
-
-    @Test func thePreferredMethodIsPreselectedWhenAllowed() {
-        #expect(preselected([.squash, .rebase], preferred: .rebase) == .rebase)
-        #expect(preselected([.merge, .rebase], preferred: .squash) == .merge)
-        #expect(preselected([], preferred: .squash) == nil)
-    }
-
     @Test func theNoMethodMessageMatchesTheTui() {
         #expect(noMergeMethodMessage == "No merge method allowed on this repository.")
     }
@@ -84,12 +73,6 @@ struct PresentationTests {
         #expect(methodLabel(.squash) == "Squash and merge")
         #expect(methodLabel(.rebase) == "Rebase and merge")
         #expect(methodLabel(.merge) == "Create a merge commit")
-    }
-
-    @Test func theDetailHasItsSectionsInOrder() throws {
-        let detail = try decodeOwl(PrDetail.self, from: fixture("detail")).get()
-        #expect(detailSections(detail, now: now).map(\.title) == ["Checks", "Reviews", "Comments", "Files"])
-        #expect(detailHeader(detail).last == "+214 −37")
     }
 
     @Test func theNotificationText() throws {

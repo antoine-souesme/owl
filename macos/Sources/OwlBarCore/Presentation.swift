@@ -43,15 +43,6 @@ public func reviewGlyph(_ state: ReviewState) -> Glyph {
     }
 }
 
-public func reviewLabel(_ state: ReviewState) -> String {
-    switch state {
-    case .approved: "approved"
-    case .changesRequested: "changes requested"
-    case .reviewRequired: "review required"
-    case .none: "nothing to report"
-    }
-}
-
 public func methodLabel(_ method: MergeMethod) -> String {
     switch method {
     case .squash: "Squash and merge"
@@ -146,57 +137,7 @@ public func rows(_ prs: [PullRequest], now: Date, selected: PrKey? = nil, frame:
     }
 }
 
-public struct DetailLine: Equatable, Sendable {
-    public let glyph: Glyph?
-    public let text: String
-    public let note: String?
-}
-
-public struct DetailSection: Equatable, Sendable {
-    public let title: String
-    public let lines: [DetailLine]
-}
-
-/// Lignes d'en-tête du détail, sous le titre.
-public func detailHeader(_ detail: PrDetail) -> [String] {
-    let pr = detail.summary
-    return [
-        "\(pr.repo) #\(pr.number) · by \(pr.author)",
-        "\(pr.headRef) → \(pr.baseRef)",
-        "+\(detail.additions) −\(detail.deletions)",
-    ]
-}
-
-public func detailSections(_ detail: PrDetail, now: Date, frame: Int = 0) -> [DetailSection] {
-    [
-        DetailSection(title: "Checks", lines: detail.checks.map {
-            DetailLine(glyph: checksGlyph($0.state, frame: frame), text: $0.name, note: nil)
-        }),
-        DetailSection(title: "Reviews", lines: detail.reviews.map {
-            DetailLine(
-                glyph: reviewGlyph($0.state),
-                text: "\($0.author) · \(reviewLabel($0.state)) · \(shortAge(from: $0.submittedAt, now: now))",
-                note: $0.body.isEmpty ? nil : $0.body
-            )
-        }),
-        DetailSection(title: "Comments", lines: detail.comments.map {
-            DetailLine(glyph: nil, text: "\($0.author) · \(shortAge(from: $0.createdAt, now: now))", note: $0.body)
-        }),
-        DetailSection(title: "Files", lines: detail.files.map {
-            DetailLine(glyph: nil, text: $0.path, note: "+\($0.additions) −\($0.deletions)")
-        }),
-    ]
-}
-
 public let noMergeMethodMessage = "No merge method allowed on this repository."
-
-public func mergeChoices(_ pr: PullRequest) -> [MergeMethod] {
-    MergeMethod.allCases.filter { pr.mergeMethods.contains($0) }
-}
-
-public func preselected(_ choices: [MergeMethod], preferred: MergeMethod) -> MergeMethod? {
-    choices.contains(preferred) ? preferred : choices.first
-}
 
 public let readyTitle = "Ready to merge"
 

@@ -16,6 +16,10 @@ final class FakeRunner: OwlRunning, @unchecked Sendable {
     }
 }
 
+final class FakeBrowser: @unchecked Sendable {
+    var opened: [URL] = []
+}
+
 final class FakeNotifier: Notifying, @unchecked Sendable {
     var sent: [(String, String)] = []
     func notify(title: String, body: String) { sent.append((title, body)) }
@@ -52,11 +56,17 @@ func listWith(_ prs: [PullRequest]) throws -> Result<Data, OwlFailure> {
 final class BarStateTests {
     let runner = FakeRunner()
     let notifier = FakeNotifier()
+    let browser = FakeBrowser()
     var clock = Date(timeIntervalSince1970: 1_800_000_000)
     var state: BarState!
 
     init() {
-        state = BarState(runner: runner, notifier: notifier, now: { [unowned self] in self.clock })
+        state = BarState(
+            runner: runner,
+            notifier: notifier,
+            openURL: { [browser] in browser.opened.append($0) },
+            now: { [unowned self] in self.clock }
+        )
     }
 
     @Test func beforeTheFirstListTheIconWaits() {
@@ -147,33 +157,6 @@ final class BarStateTests {
         #expect(notifier.sent.map(\.1) == [readyBody(ready)])
     }
 
-    @Test func openingAPullRequestLoadsItsDetail() async throws {
-        let key = PrKey(repo: "moi/owl", number: 42)
-        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
-        await state.open(key)
-        #expect(state.openKey == key)
-        guard case .loaded(let detail) = state.detail else {
-            Issue.record("détail attendu")
-            return
-        }
-        #expect(detail.summary.number == 42)
-    }
-
-    @Test func aLateDetailForAnotherPullRequestIsIgnored() async throws {
-        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
-        runner.delay = 50_000_000
-        let state = self.state!
-        let first = Task { await state.open(PrKey(repo: "moi/owl", number: 42)) }
-        while runner.calls.isEmpty { await Task.yield() }
-        state.back()
-        runner.delay = 0
-        runner.answers["detail moi/notes 7"] = errorAnswer("not_found", "Pull request not found.")
-        await state.open(PrKey(repo: "moi/notes", number: 7))
-        await first.value
-        #expect(state.openKey == PrKey(repo: "moi/notes", number: 7))
-        #expect(state.detail == .failed("Pull request not found."))
-    }
-
     @Test func theFirstRowIsSelectedAfterTheFirstList() async throws {
         runner.answers["list"] = try listAnswer()
         await state.refresh()
@@ -221,15 +204,6 @@ final class BarStateTests {
         #expect(!state.isAnimating)
     }
 
-    @Test func theRunningChecksOfTheDetailTurnToo() async throws {
-        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
-        await state.open(PrKey(repo: "moi/owl", number: 42))
-        #expect(state.isAnimating)
-        state.tick()
-        let checks = try #require(state.detailSectionList.first { $0.title == "Checks" })
-        #expect(checks.lines[1].glyph?.symbol == "⠙")
-    }
-
     // MARK: fenêtre de fusion
 
     let mergeOk: Result<Data, OwlFailure> = .success(Data(#"{"version":1,"ok":true,"data":{}}"#.utf8))
@@ -240,14 +214,6 @@ final class BarStateTests {
         runner.answers["list"] = try listWith([pr])
         await state.refresh()
         return pr
-    }
-
-    @Test func mOpensTheMergeWindowWithoutOpeningTheDetail() async throws {
-        _ = try await loadMergeable()
-        await state.press(.m)
-        #expect(state.openKey == nil)
-        #expect(state.mergeDialog?.stage == .choosing)
-        #expect(state.mergeRendering?.title == "Merge")
     }
 
     @Test func mOnADraftShowsWhyAndOpensNothing() async throws {
@@ -332,34 +298,52 @@ final class BarStateTests {
         #expect(state.selectedKey?.number == 42)
     }
 
-    @Test func mergingFromTheDetailGoesBackToTheList() async throws {
+
+    @Test func mOpensTheMergeWindowOverTheList() async throws {
         _ = try await loadMergeable()
-        runner.answers["detail moi/owl 42"] = .success(try fixture("detail"))
-        runner.answers["merge moi/owl 42 squash"] = mergeOk
-        await state.press(.enter)
-        #expect(state.openKey?.number == 42)
         await state.press(.m)
-        #expect(state.mergeDialog?.stage == .choosing, "le détail enregistré vise develop : pas d'avertissement")
+        #expect(state.mergeDialog?.stage == .choosing)
+        #expect(state.mergeRendering?.title == "Merge")
+    }
+
+    @Test func clickingARowSelectsItAndOpensTheMergeWindow() async throws {
+        runner.answers["list"] = try listWith([try recordedList()[1], try mergeablePR()])
+        await state.refresh()
+        state.click(PrKey(repo: "moi/owl", number: 42))
+        #expect(state.selectedKey?.number == 42)
+        #expect(state.mergeDialog?.key.number == 42)
+    }
+
+    @Test func enterOnTheListOpensTheMergeWindowToo() async throws {
+        _ = try await loadMergeable()
         await state.press(.enter)
-        #expect(state.openKey == nil)
+        #expect(state.mergeDialog?.stage == .choosing)
+    }
+
+    @Test func theGithubButtonOpensThatPullRequest() async throws {
+        runner.answers["list"] = try listAnswer()
+        await state.refresh()
+        state.openOnGitHub(PrKey(repo: "moi/owl", number: 42))
+        #expect(browser.opened == [URL(string: try recordedList()[0].url)!])
         #expect(state.mergeDialog == nil)
     }
 
-    @Test func theKeysOfTheListAndOfTheDetail() async throws {
+    @Test func oOpensTheSelectionOnGithub() async throws {
         runner.answers["list"] = try listAnswer()
-        runner.answers["detail moi/owl 7"] = errorAnswer("not_found", "Pull request not found.")
+        await state.refresh()
+        await state.press(.down)
+        await state.press(.o)
+        #expect(browser.opened == [URL(string: try recordedList()[1].url)!])
+    }
+
+    @Test func theKeysOfTheList() async throws {
+        runner.answers["list"] = try listAnswer()
         await state.press(.r)
         #expect(state.pullRequests.count == 5)
         await state.press(.down)
-        await state.press(.up)
         await state.press(.down)
-        await state.press(.right)
-        #expect(state.openKey?.number == 7)
-        await state.press(.left)
-        #expect(state.openKey == nil)
-        await state.press(.enter)
-        await state.press(.escape)
-        #expect(state.openKey == nil)
+        await state.press(.up)
+        #expect(state.selectedKey?.number == 7)
     }
 }
 

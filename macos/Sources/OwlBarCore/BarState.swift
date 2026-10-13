@@ -7,16 +7,10 @@ public protocol Notifying: Sendable {
     func notify(title: String, body: String)
 }
 
-public enum DetailStatus: Equatable, Sendable {
-    case loading
-    case loaded(PrDetail)
-    case failed(String)
-}
-
 /// Touches du panneau, traitées ici comme `App::handle` les traite dans la
 /// TUI : les vues ne font que les transmettre.
 public enum PanelKey: Sendable {
-    case up, down, left, right, enter, escape, m, r
+    case up, down, enter, escape, m, o, r
 }
 
 @MainActor
@@ -26,8 +20,6 @@ public final class BarState: ObservableObject {
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var isRefreshing = false
     @Published public private(set) var lastRefresh: Date?
-    @Published public private(set) var openKey: PrKey?
-    @Published public private(set) var detail: DetailStatus = .loading
     @Published public private(set) var mergeDialog: MergeDialog?
     /// Message bref posé par une action, effacé à la touche suivante.
     @Published public private(set) var notice: String?
@@ -43,11 +35,18 @@ public final class BarState: ObservableObject {
 
     private let runner: OwlRunning
     private let notifier: Notifying
+    private let openURL: (URL) -> Void
     private let now: () -> Date
 
-    public init(runner: OwlRunning, notifier: Notifying, now: @escaping () -> Date = Date.init) {
+    public init(
+        runner: OwlRunning,
+        notifier: Notifying,
+        openURL: @escaping (URL) -> Void,
+        now: @escaping () -> Date = Date.init
+    ) {
         self.runner = runner
         self.notifier = notifier
+        self.openURL = openURL
         self.now = now
     }
 
@@ -57,16 +56,11 @@ public final class BarState: ObservableObject {
 
     public var rows: [Row] { OwlBarCore.rows(pullRequests, now: now(), selected: selectedKey, frame: frame) }
 
-    /// Une vérification tourne quelque part à l'écran : liste ou détail.
+    /// Une vérification tourne quelque part dans la liste.
     public var isAnimating: Bool {
-        let inList = pullRequests.contains {
+        pullRequests.contains {
             $0.checks == .pending || $0.checkRuns.contains { $0.state == .pending }
         }
-        if inList { return true }
-        if case .loaded(let detail) = detail {
-            return detail.checks.contains { $0.state == .pending }
-        }
-        return false
     }
 
     /// Tour d'horloge de l'animation. Rien ne change, donc rien ne se
@@ -93,21 +87,28 @@ public final class BarState: ObservableObject {
         selectedKey = pullRequests[next].key
     }
 
-    /// Ouvre la PR sélectionnée.
-    public func openSelection() async {
-        guard let selectedKey else { return }
-        await open(selectedKey)
+    /// Clic sur une ligne : la sélectionne et ouvre sa fenêtre de fusion.
+    public func click(_ key: PrKey) {
+        guard pullRequests.contains(where: { $0.key == key }) else { return }
+        selectedKey = key
+        startMerge()
+    }
+
+    /// Ouvre la PR dans le navigateur.
+    public func openOnGitHub(_ key: PrKey) {
+        notice = nil
+        guard let pr = pullRequests.first(where: { $0.key == key }),
+              let url = URL(string: pr.url)
+        else { return }
+        openURL(url)
     }
 
     public var mergeRendering: MergeRender? { mergeDialog.map(mergeRender) }
 
-    /// Touche `m` : ouvre la fenêtre de fusion pour la PR affichée, celle du
-    /// détail ou la sélection de la liste.
+    /// Touche `m` : ouvre la fenêtre de fusion pour la PR sélectionnée.
     public func startMerge() {
         notice = nil
-        guard let key = openKey ?? selectedKey,
-              let pr = (openKey == key ? openPullRequest : nil) ?? pullRequests.first(where: { $0.key == key })
-        else { return }
+        guard let pr = pullRequests.first(where: { $0.key == selectedKey }) else { return }
         switch openMerge(pr, lastUsed: lastUsedMethod, preferred: preferredMethod) {
         case .dialog(let dialog): mergeDialog = dialog
         case .denied(let message): notice = message
@@ -162,7 +163,6 @@ public final class BarState: ObservableObject {
             if !pullRequests.contains(where: { $0.key == selectedKey }) {
                 selectedKey = pullRequests.first?.key
             }
-            if openKey == key { openKey = nil }
             await refresh()
         case .failure(let failure):
             running.stage = .failed(failure.message)
@@ -187,27 +187,14 @@ public final class BarState: ObservableObject {
             return
         }
         switch key {
+        case .up: selectPrevious()
+        case .down: selectNext()
+        case .enter, .m: startMerge()
+        case .o: if let selectedKey { openOnGitHub(selectedKey) }
         case .r:
             notice = nil
             await refresh()
-            return
-        case .m:
-            startMerge()
-            return
-        default: break
-        }
-        if openKey != nil {
-            switch key {
-            case .left, .escape: back()
-            default: break
-            }
-        } else {
-            switch key {
-            case .up: selectPrevious()
-            case .down: selectNext()
-            case .enter, .right: await openSelection()
-            default: break
-            }
+        case .escape: break
         }
     }
 
@@ -222,29 +209,6 @@ public final class BarState: ObservableObject {
     /// configuration la désactive.
     public var nextRefreshDelay: TimeInterval? {
         refreshInterval > 0 ? TimeInterval(refreshInterval) : nil
-    }
-
-    public var openPullRequest: PullRequest? {
-        guard let openKey else { return nil }
-        if case .loaded(let detail) = detail, detail.summary.key == openKey { return detail.summary }
-        return pullRequests.first { $0.key == openKey }
-    }
-
-    public var detailHeaderLines: [String] {
-        if case .loaded(let detail) = detail { return detailHeader(detail) }
-        return []
-    }
-
-    public var detailSectionList: [DetailSection] {
-        if case .loaded(let detail) = detail { return detailSections(detail, now: now(), frame: frame) }
-        return []
-    }
-
-    /// Méthodes à proposer pour la PR ouverte, et celle présélectionnée.
-    public var mergeOptions: (choices: [MergeMethod], selected: MergeMethod?) {
-        guard let pr = openPullRequest else { return ([], nil) }
-        let choices = mergeChoices(pr)
-        return (choices, preselected(choices, preferred: preferredMethod))
     }
 
     public func refresh() async {
@@ -275,26 +239,5 @@ public final class BarState: ObservableObject {
             errorMessage = failure.message
             if failure.kind == "rate_limited" { pausedUntil = failure.resetAt }
         }
-    }
-
-    public func open(_ key: PrKey) async {
-        notice = nil
-        openKey = key
-        selectedKey = key
-        detail = .loading
-        let result = await runner.run(["detail", key.repo, String(key.number)])
-            .flatMap { decodeOwl(PrDetail.self, from: $0) }
-        // Retour à la liste ou autre PR ouverte entre-temps : cette réponse
-        // ne concerne plus l'écran.
-        guard openKey == key else { return }
-        switch result {
-        case .success(let value): detail = .loaded(value)
-        case .failure(let failure): detail = .failed(failure.message)
-        }
-    }
-
-    public func back() {
-        notice = nil
-        openKey = nil
     }
 }

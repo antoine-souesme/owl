@@ -6,7 +6,11 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let state = BarState(runner: ProcessRunner(), notifier: SystemNotifier())
+    let state = BarState(
+        runner: ProcessRunner(),
+        notifier: SystemNotifier(),
+        openURL: { NSWorkspace.shared.open($0) }
+    )
     private var loop: Task<Void, Never>?
     private var animation: Task<Void, Never>?
 

@@ -35,12 +35,10 @@ struct ListView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(state.rows) { row in
-                            Button {
-                                Task { await state.open(row.id) }
-                            } label: {
-                                RowView(row: row)
+                            RowView(row: row) {
+                                state.openOnGitHub(row.id)
                             }
-                            .buttonStyle(.plain)
+                            .onTapGesture { state.click(row.id) }
                             .id(row.id)
                             Divider()
                         }
@@ -68,6 +66,7 @@ struct ListView: View {
 
 struct RowView: View {
     let row: Row
+    let openOnGitHub: () -> Void
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -125,6 +124,12 @@ struct RowView: View {
                     .font(.system(.caption, design: .monospaced))
                 }
             }
+            Spacer(minLength: 0)
+            Button(action: openOnGitHub) {
+                Image(systemName: "arrow.up.right.square")
+            }
+            .buttonStyle(.borderless)
+            .help("Open on GitHub")
         }
         .opacity(row.dim ? 0.5 : 1)
         .padding(.horizontal, 10)
