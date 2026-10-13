@@ -1,0 +1,148 @@
+// État du panneau. Il demande à `owl` et décide de ce qui s'affiche ; il ne
+// lance aucun processus lui-même (c'est le travail de `OwlRunning`) et ne
+// dessine rien.
+import Foundation
+
+public protocol Notifying: Sendable {
+    func notify(title: String, body: String)
+}
+
+public enum DetailStatus: Equatable, Sendable {
+    case loading
+    case loaded(PrDetail)
+    case failed(String)
+}
+
+public enum MergeStatus: Equatable, Sendable {
+    case idle
+    case running
+    case failed(String)
+}
+
+@MainActor
+public final class BarState: ObservableObject {
+    @Published public private(set) var pullRequests: [PullRequest] = []
+    @Published public private(set) var loaded = false
+    @Published public private(set) var errorMessage: String?
+    @Published public private(set) var isRefreshing = false
+    @Published public private(set) var lastRefresh: Date?
+    @Published public private(set) var openKey: PrKey?
+    @Published public private(set) var detail: DetailStatus = .loading
+    @Published public private(set) var mergeStatus: MergeStatus = .idle
+    public private(set) var preferredMethod: MergeMethod = .squash
+    private var refreshInterval = 60
+    private var pausedUntil: Date?
+    private var tracker = ReadyTracker()
+
+    private let runner: OwlRunning
+    private let notifier: Notifying
+    private let now: () -> Date
+
+    public init(runner: OwlRunning, notifier: Notifying, now: @escaping () -> Date = Date.init) {
+        self.runner = runner
+        self.notifier = notifier
+        self.now = now
+    }
+
+    public var title: String {
+        menuBarTitle(counter: loaded ? counter(pullRequests) : nil, failed: errorMessage != nil)
+    }
+
+    public var rows: [Row] { OwlBarCore.rows(pullRequests, now: now()) }
+
+    /// « Updated 3m ago », ou « Updating… » pendant une lecture.
+    public var refreshLabel: String {
+        if isRefreshing { return "Updating…" }
+        guard let lastRefresh else { return "" }
+        return "Updated \(shortAge(from: lastRefresh, now: now())) ago"
+    }
+
+    /// Délai avant la prochaine lecture automatique ; `nil` quand la
+    /// configuration la désactive.
+    public var nextRefreshDelay: TimeInterval? {
+        refreshInterval > 0 ? TimeInterval(refreshInterval) : nil
+    }
+
+    public var openPullRequest: PullRequest? {
+        guard let openKey else { return nil }
+        if case .loaded(let detail) = detail, detail.summary.key == openKey { return detail.summary }
+        return pullRequests.first { $0.key == openKey }
+    }
+
+    public var detailHeaderLines: [String] {
+        if case .loaded(let detail) = detail { return detailHeader(detail) }
+        return []
+    }
+
+    public var detailSectionList: [DetailSection] {
+        if case .loaded(let detail) = detail { return detailSections(detail, now: now()) }
+        return []
+    }
+
+    /// Méthodes à proposer pour la PR ouverte, et celle présélectionnée.
+    public var mergeOptions: (choices: [MergeMethod], selected: MergeMethod?) {
+        guard let pr = openPullRequest else { return ([], nil) }
+        let choices = mergeChoices(pr)
+        return (choices, preselected(choices, preferred: preferredMethod))
+    }
+
+    public func refresh() async {
+        guard !isRefreshing else { return }
+        if let pausedUntil, now() < pausedUntil { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        let result = await runner.run(["list"]).flatMap { decodeOwl(ListData.self, from: $0) }
+        switch result {
+        case .success(let list):
+            pullRequests = list.pullRequests
+            preferredMethod = list.preferredMergeMethod
+            refreshInterval = list.refreshInterval
+            pausedUntil = nil
+            errorMessage = nil
+            loaded = true
+            lastRefresh = now()
+            for pr in tracker.update(list.pullRequests) {
+                notifier.notify(title: readyTitle, body: readyBody(pr))
+            }
+        case .failure(let failure):
+            errorMessage = failure.message
+            if failure.kind == "rate_limited" { pausedUntil = failure.resetAt }
+        }
+    }
+
+    public func open(_ key: PrKey) async {
+        openKey = key
+        detail = .loading
+        mergeStatus = .idle
+        let result = await runner.run(["detail", key.repo, String(key.number)])
+            .flatMap { decodeOwl(PrDetail.self, from: $0) }
+        // Retour à la liste ou autre PR ouverte entre-temps : cette réponse
+        // ne concerne plus l'écran.
+        guard openKey == key else { return }
+        switch result {
+        case .success(let value): detail = .loaded(value)
+        case .failure(let failure): detail = .failed(failure.message)
+        }
+    }
+
+    public func back() {
+        openKey = nil
+        mergeStatus = .idle
+    }
+
+    public func merge(_ method: MergeMethod) async {
+        guard let key = openKey, mergeStatus != .running else { return }
+        mergeStatus = .running
+        let result = await runner.run(["merge", key.repo, String(key.number), method.rawValue])
+            .flatMap { decodeOwl(MergeData.self, from: $0) }
+        switch result {
+        case .success:
+            mergeStatus = .idle
+            if openKey == key { openKey = nil }
+            await refresh()
+        case .failure(let failure):
+            mergeStatus = .failed(failure.message)
+        }
+    }
+}

@@ -1,0 +1,98 @@
+import Foundation
+import Testing
+@testable import OwlBarCore
+
+func recordedList() throws -> [PullRequest] {
+    try decodeOwl(ListData.self, from: fixture("list")).get().pullRequests
+}
+
+struct PresentationTests {
+    let now = ISO8601DateFormatter().date(from: "2026-08-30T12:00:00Z")!
+
+    @Test func theAgeGoesFromMinutesToHoursToDays() {
+        #expect(shortAge(from: now.addingTimeInterval(-59 * 60), now: now) == "59m")
+        #expect(shortAge(from: now.addingTimeInterval(-60 * 60), now: now) == "1h")
+        #expect(shortAge(from: now.addingTimeInterval(-25 * 3600), now: now) == "1d")
+    }
+
+    @Test func aDateInTheFutureGivesZero() {
+        #expect(shortAge(from: now.addingTimeInterval(300), now: now) == "0m")
+    }
+
+    @Test func eachStateHasTheGlyphOfTheTui() {
+        #expect(checksGlyph(.success) == Glyph(symbol: "✓", tone: .green))
+        #expect(checksGlyph(.failure) == Glyph(symbol: "✗", tone: .red))
+        #expect(checksGlyph(.pending).tone == .yellow)
+        #expect(checksGlyph(.none) == Glyph(symbol: "·", tone: .gray))
+        #expect(reviewGlyph(.approved) == Glyph(symbol: "✓", tone: .green))
+        #expect(reviewGlyph(.changesRequested) == Glyph(symbol: "✗", tone: .red))
+        #expect(reviewGlyph(.reviewRequired) == Glyph(symbol: "●", tone: .yellow))
+        #expect(reviewGlyph(.none) == Glyph(symbol: "·", tone: .gray))
+    }
+
+    @Test func theCounterSplitsReadyFromTheRest() throws {
+        let prs = try recordedList()
+        let ready = prs.filter { $0.mergeState == .clean }.count
+        #expect(counter(prs) == Counter(ready: ready, others: prs.count - ready))
+    }
+
+    @Test func theMenuBarTitle() {
+        #expect(menuBarTitle(counter: nil, failed: false) == "🦉 …")
+        #expect(menuBarTitle(counter: Counter(ready: 2, others: 5), failed: false) == "🦉 2 · 5")
+        #expect(menuBarTitle(counter: Counter(ready: 2, others: 5), failed: true) == "🦉 ⚠")
+    }
+
+    @Test func aRowCarriesTheColumnsOfTheTui() throws {
+        let row = try #require(rows(recordedList(), now: now).first)
+        #expect(row.repo == "moi/owl")
+        #expect(row.number == "#42")
+        #expect(row.target == "develop")
+        #expect(row.title == "Ajoute la fenêtre de fusion")
+        #expect(row.age == "2h")
+        #expect(row.checks == checksGlyph(.success))
+        #expect(row.flags == [])
+    }
+
+    @Test func draftsAndConflictsAreFlagged() throws {
+        let draft = try #require(rows(recordedList(), now: now).first { $0.number == "#7" })
+        #expect(draft.flags.contains("draft"))
+        let conflicting = try recordedList().filter { $0.mergeable == .conflicting }
+        #expect(!conflicting.isEmpty)
+        for row in rows(conflicting, now: now) {
+            #expect(row.flags.contains("⚠ conflicts"))
+        }
+    }
+
+    @Test func onlyAllowedMethodsAreOfferedInOrder() throws {
+        let pr = try recordedList()[0]
+        #expect(mergeChoices(pr) == [.squash, .rebase])
+    }
+
+    @Test func thePreferredMethodIsPreselectedWhenAllowed() {
+        #expect(preselected([.squash, .rebase], preferred: .rebase) == .rebase)
+        #expect(preselected([.merge, .rebase], preferred: .squash) == .merge)
+        #expect(preselected([], preferred: .squash) == nil)
+    }
+
+    @Test func theNoMethodMessageMatchesTheTui() {
+        #expect(noMergeMethodMessage == "No merge method allowed on this repository.")
+    }
+
+    @Test func methodLabelsMatchTheTui() {
+        #expect(methodLabel(.squash) == "Squash and merge")
+        #expect(methodLabel(.rebase) == "Rebase and merge")
+        #expect(methodLabel(.merge) == "Create a merge commit")
+    }
+
+    @Test func theDetailHasItsSectionsInOrder() throws {
+        let detail = try decodeOwl(PrDetail.self, from: fixture("detail")).get()
+        #expect(detailSections(detail, now: now).map(\.title) == ["Checks", "Reviews", "Comments", "Files"])
+        #expect(detailHeader(detail).last == "+214 −37")
+    }
+
+    @Test func theNotificationText() throws {
+        let pr = try recordedList()[0]
+        #expect(readyTitle == "Ready to merge")
+        #expect(readyBody(pr) == "moi/owl #42 · Ajoute la fenêtre de fusion")
+    }
+}
