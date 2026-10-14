@@ -125,3 +125,13 @@ struct PresentationTests {
         #expect(row.checkLines.map(\.glyph.symbol) == ["✓", "⠹", "⠹"])
     }
 }
+
+struct VersionLabelTests {
+    @Test func theVersionIsPrefixedWithV() {
+        #expect(versionLabel("0.1.6") == "v0.1.6")
+    }
+
+    @Test func noVersionShowsNothing() {
+        #expect(versionLabel(nil) == "")
+    }
+}

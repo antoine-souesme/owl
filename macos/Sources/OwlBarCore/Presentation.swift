@@ -144,3 +144,9 @@ public let readyTitle = "Ready to merge"
 public func readyBody(_ pr: PullRequest) -> String {
     "\(pr.repo) #\(pr.number) · \(pr.title)"
 }
+
+/// Version affichée au pied du panneau. Sans version — app lancée hors de
+/// son paquet `.app` —, rien.
+public func versionLabel(_ version: String?) -> String {
+    version.map { "v\($0)" } ?? ""
+}

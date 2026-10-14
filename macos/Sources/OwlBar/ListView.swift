@@ -56,6 +56,9 @@ struct ListView: View {
                 Toggle("Launch at login", isOn: $login.isOn)
                     .toggleStyle(.checkbox)
                 Spacer()
+                Text(versionLabel(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Button("Quit") { NSApplication.shared.terminate(nil) }
                     .keyboardShortcut("q")
             }
