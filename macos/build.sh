@@ -15,6 +15,9 @@ mkdir -p "$app/Contents/MacOS"
 cp "$binaries/OwlBar" "$app/Contents/MacOS/OwlBar"
 cp ../target/release/owl "$app/Contents/MacOS/owl"
 cp Resources/Info.plist "$app/Contents/Info.plist"
+# La version de l'app est celle de owl, lue dans Cargo.toml.
+version="$(sed -n 's/^version = "\(.*\)"$/\1/p' ../Cargo.toml | head -1)"
+plutil -replace CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"
 # Le programme embarqué d'abord, l'app ensuite : la signature de l'app couvre
 # ce qu'elle contient.
 codesign --force --sign - "$app/Contents/MacOS/owl"
