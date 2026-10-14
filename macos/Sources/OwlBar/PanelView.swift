@@ -18,8 +18,16 @@ struct PanelView: View {
         .overlay {
             if let render = state.mergeRendering {
                 ZStack {
+                    // Un clic hors de la fenêtre l'annule, comme Échap :
+                    // `cancelMerge` refuse déjà pendant l'envoi de la fusion.
                     Color.black.opacity(0.35)
+                        .contentShape(Rectangle())
+                        .onTapGesture { state.cancelMerge() }
                     MergeDialogView(state: state, render: render)
+                        // Un clic dans la fenêtre, hors des boutons, ne doit
+                        // pas traverser jusqu'au fond qui l'annule.
+                        .contentShape(Rectangle())
+                        .onTapGesture {}
                 }
             }
         }
