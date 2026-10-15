@@ -11,6 +11,7 @@ use crate::model::{
     ChecksState, ListPage, MergeMethod, MergeState, MergeableState, PrDetail, PrSummary,
     ReviewState,
 };
+use crate::ports::{Listing, PortsError, Stopped};
 use crate::token::TokenError;
 
 /// Version du format. L'app refuse toute autre valeur.
@@ -78,6 +79,17 @@ impl From<&ConfigError> for ErrorBody {
 impl From<&TokenError> for ErrorBody {
     fn from(error: &TokenError) -> Self {
         Self::new("token", error.to_string())
+    }
+}
+
+impl From<&PortsError> for ErrorBody {
+    fn from(error: &PortsError) -> Self {
+        let kind = match error {
+            PortsError::NotListening { .. } => "not_listening",
+            PortsError::Denied { .. } => "permission",
+            PortsError::System(_) => "system",
+        };
+        Self::new(kind, error.to_string())
     }
 }
 
@@ -179,6 +191,64 @@ struct FileOut {
 /// Réponse d'une fusion réussie : rien à dire de plus que `ok`.
 #[derive(Serialize)]
 pub struct MergeOut {}
+
+#[derive(Serialize)]
+pub struct PortsOut {
+    servers: Vec<ServerOut>,
+    hidden: bool,
+}
+
+/// `project`, `directory` et `critical` sont écrits `null` quand ils
+/// manquent : l'app lit toujours les mêmes clés.
+#[derive(Serialize)]
+struct ServerOut {
+    port: u16,
+    pid: u32,
+    project: Option<String>,
+    directory: Option<String>,
+    command: String,
+    started_at: String,
+    user: String,
+    critical: Option<CriticalOut>,
+}
+
+#[derive(Serialize)]
+struct CriticalOut {
+    reason: String,
+}
+
+#[derive(Serialize)]
+pub struct StopOut {
+    stopped: Vec<u32>,
+    forced: bool,
+}
+
+pub fn ports_data(listing: &Listing) -> PortsOut {
+    PortsOut {
+        servers: listing
+            .servers
+            .iter()
+            .map(|server| ServerOut {
+                port: server.port,
+                pid: server.pid,
+                project: server.project.clone(),
+                directory: server.directory.clone(),
+                command: server.command.clone(),
+                started_at: date(server.started_at),
+                user: server.user.clone(),
+                critical: server.critical.clone().map(|reason| CriticalOut { reason }),
+            })
+            .collect(),
+        hidden: listing.hidden,
+    }
+}
+
+pub fn stop_data(stopped: &Stopped) -> StopOut {
+    StopOut {
+        stopped: stopped.stopped.clone(),
+        forced: stopped.forced,
+    }
+}
 
 pub fn list_data(page: &ListPage, settings: &Config) -> ListOut {
     ListOut {
@@ -345,6 +415,105 @@ mod tests {
             .to_detail(page().pull_requests[0].clone())
     }
 
+    fn ports_json() -> Value {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let listing = crate::ports::Listing {
+            servers: crate::ports::servers(
+                &crate::ports::recorded(),
+                crate::ports::Scope::Node,
+                501,
+                now,
+            ),
+            hidden: false,
+        };
+        let (text, _) = envelope(Ok(ports_data(&listing)));
+        serde_json::from_str(&text).unwrap()
+    }
+
+    fn stop_json() -> Value {
+        let stopped = crate::ports::Stopped {
+            stopped: vec![35815, 35834, 35860],
+            forced: false,
+        };
+        let (text, _) = envelope(Ok(stop_data(&stopped)));
+        serde_json::from_str(&text).unwrap()
+    }
+
+    #[test]
+    fn a_server_is_written_in_full() {
+        let json = ports_json();
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["data"]["hidden"], false);
+        assert_eq!(
+            json["data"]["servers"][0],
+            serde_json::json!({
+                "port": 3000,
+                "pid": 35860,
+                "project": "erp-menage",
+                "directory": "/Users/antoinesouesme/dev/projets/gkfa/erp-menage",
+                "command": "npm run dev",
+                "started_at": "2026-10-14T20:31:47Z",
+                "user": "antoinesouesme",
+                "critical": null
+            })
+        );
+    }
+
+    #[test]
+    fn a_critical_port_carries_its_reason_and_a_missing_project_is_null() {
+        let now = chrono::Utc::now();
+        let listing = crate::ports::Listing {
+            servers: crate::ports::servers(
+                &crate::ports::recorded(),
+                crate::ports::Scope::Port(7000),
+                501,
+                now,
+            ),
+            hidden: false,
+        };
+        let (text, _) = envelope(Ok(ports_data(&listing)));
+        let json: Value = serde_json::from_str(&text).unwrap();
+        let server = &json["data"]["servers"][0];
+        assert_eq!(
+            server["critical"],
+            serde_json::json!({ "reason": "AirPlay Receiver" })
+        );
+        assert_eq!(server["project"], Value::Null);
+    }
+
+    #[test]
+    fn a_stop_lists_the_chain_and_whether_it_was_forced() {
+        assert_eq!(
+            stop_json()["data"],
+            serde_json::json!({ "stopped": [35815, 35834, 35860], "forced": false })
+        );
+    }
+
+    #[test]
+    fn port_errors_have_their_own_kind() {
+        use crate::ports::PortsError;
+        for (error, kind) in [
+            (
+                PortsError::NotListening { pid: 1, port: 2 },
+                "not_listening",
+            ),
+            (
+                PortsError::Denied {
+                    pid: 1,
+                    user: "root".into(),
+                },
+                "permission",
+            ),
+            (PortsError::System("boom".into()), "system"),
+        ] {
+            let body = ErrorBody::from(&error);
+            assert_eq!(body.kind, kind);
+            assert_eq!(body.message, error.to_string());
+        }
+    }
+
     fn list_json() -> Value {
         let (text, ok) = envelope(Ok(list_data(&page(), &Config::default())));
         assert!(ok);
@@ -482,6 +651,8 @@ mod tests {
         let expected = [
             ("list.json", pretty(&list_json())),
             ("detail.json", pretty(&detail_json())),
+            ("ports.json", pretty(&ports_json())),
+            ("stop.json", pretty(&stop_json())),
         ];
         let update = std::env::var("OWL_UPDATE_FIXTURES").is_ok();
         for (name, content) in expected {

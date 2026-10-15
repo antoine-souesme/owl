@@ -7,6 +7,7 @@ mod filter;
 mod github;
 mod model;
 mod notify;
+mod ports;
 mod startup;
 mod token;
 mod ui;

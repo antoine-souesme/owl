@@ -3,27 +3,9 @@ import SwiftUI
 
 struct ListView: View {
     @ObservedObject var state: BarState
-    @StateObject private var login = LaunchAtLoginToggle()
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(state.refreshLabel)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    Task { await state.refresh() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .disabled(state.isRefreshing)
-            }
-            .padding(10)
-
-            Divider()
-
             if let message = state.errorMessage {
                 Text(message)
                     .textSelection(.enabled)
@@ -49,21 +31,25 @@ struct ListView: View {
                 }
                 }
             }
-
-            Divider()
-
-            HStack {
-                Toggle("Launch at login", isOn: $login.isOn)
-                    .toggleStyle(.checkbox)
-                Spacer()
-                Text(versionLabel(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button("Quit") { NSApplication.shared.terminate(nil) }
-                    .keyboardShortcut("q")
-            }
-            .padding(10)
         }
+    }
+}
+
+/// Bout droit de la ligne des onglets, côté pull requests.
+struct ListHeader: View {
+    @ObservedObject var state: BarState
+
+    var body: some View {
+        Text(state.refreshLabel)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        Button {
+            Task { await state.refresh() }
+        } label: {
+            Image(systemName: "arrow.clockwise")
+        }
+        .buttonStyle(.borderless)
+        .disabled(state.isRefreshing)
     }
 }
 

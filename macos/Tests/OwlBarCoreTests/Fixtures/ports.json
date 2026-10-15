@@ -1,0 +1,29 @@
+{
+  "data": {
+    "hidden": false,
+    "servers": [
+      {
+        "command": "npm run dev",
+        "critical": null,
+        "directory": "/Users/antoinesouesme/dev/projets/gkfa/erp-menage",
+        "pid": 35860,
+        "port": 3000,
+        "project": "erp-menage",
+        "started_at": "2026-10-14T20:31:47Z",
+        "user": "antoinesouesme"
+      },
+      {
+        "command": "npm run dev",
+        "critical": null,
+        "directory": "/Users/antoinesouesme/dev/playground/owl/site",
+        "pid": 41022,
+        "port": 5173,
+        "project": "site",
+        "started_at": "2026-10-15T11:47:23Z",
+        "user": "antoinesouesme"
+      }
+    ]
+  },
+  "ok": true,
+  "version": 1
+}

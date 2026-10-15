@@ -36,13 +36,17 @@ compilation par défaut de Swift échoue : d'où `--build-system native`.
 Les dépendances entre modules sont à sens unique et strictes :
 
 - `model` et `filter` ne dépendent ni du réseau ni du terminal.
+- `ports` ne dépend d'aucun autre module de `owl`, ni du réseau ni du
+  terminal. Seul `ports::system` lance `lsof` et `ps` et envoie des signaux ;
+  le reste est testé sur des relevés de `tests/fixtures/ports/`.
 - `github` dépend de `model` et `filter`, jamais de `app` ni `ui`.
 - `app` ne fait aucun appel réseau : il reçoit des événements et renvoie des
   commandes que la boucle principale exécute.
 - `ui` lit `app` et dessine. Une fonction de dessin ne modifie jamais l'état et ne
   prend aucune décision.
-- `cli` dépend de `model`, `filter`, `config`, `token` et `github`, jamais de
-  `app` ni `ui`. Son JSON est le contrat de l'app de la barre des menus.
+- `cli` dépend de `model`, `filter`, `config`, `token`, `github` et `ports`,
+  jamais de `app` ni `ui`. Son JSON est le contrat de l'app de la barre des
+  menus.
 - Dans `macos/`, `OwlBarCore` décide, `OwlBar` dessine. Une vue ne choisit ni
   pictogramme, ni texte, ni format.
 

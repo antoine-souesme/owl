@@ -11,6 +11,12 @@ public protocol Notifying: Sendable {
 /// TUI : les vues ne font que les transmettre.
 public enum PanelKey: Sendable {
     case up, down, enter, escape, m, o, r
+    /// ⌘1 et ⌘2 : onglets Pull requests et Servers.
+    case tab1, tab2
+}
+
+public enum PanelTab: Sendable, Hashable {
+    case pullRequests, servers
 }
 
 @MainActor
@@ -26,6 +32,9 @@ public final class BarState: ObservableObject {
     @Published public private(set) var selectedKey: PrKey?
     /// Image courante de l'animation des vérifications en cours.
     @Published public private(set) var frame = 0
+    @Published public private(set) var tab: PanelTab = .pullRequests
+    /// L'onglet Servers, avec son propre état.
+    public let servers: ServersState
     public private(set) var preferredMethod: MergeMethod = .squash
     private var refreshInterval = 60
     private var pausedUntil: Date?
@@ -48,6 +57,7 @@ public final class BarState: ObservableObject {
         self.notifier = notifier
         self.openURL = openURL
         self.now = now
+        self.servers = ServersState(runner: runner, now: now)
     }
 
     public var title: String {
@@ -67,6 +77,18 @@ public final class BarState: ObservableObject {
     /// redessine, quand aucune vérification ne tourne.
     public func tick() {
         if isAnimating { frame += 1 }
+    }
+
+    /// Passe d'un onglet à l'autre. Arriver sur Servers relit les serveurs.
+    public func selectTab(_ tab: PanelTab) async {
+        notice = nil
+        self.tab = tab
+        if tab == .servers { await servers.reload() }
+    }
+
+    /// Le panneau vient de s'ouvrir : les serveurs affichés sont relus.
+    public func panelOpened() async {
+        if tab == .servers { await servers.reload() }
     }
 
     public func selectNext() {
@@ -187,6 +209,20 @@ public final class BarState: ObservableObject {
             return
         }
         switch key {
+        case .tab1:
+            await selectTab(.pullRequests)
+            return
+        case .tab2:
+            await selectTab(.servers)
+            return
+        default:
+            break
+        }
+        if tab == .servers {
+            await servers.press(key)
+            return
+        }
+        switch key {
         case .up: selectPrevious()
         case .down: selectNext()
         case .enter, .m: startMerge()
@@ -194,7 +230,7 @@ public final class BarState: ObservableObject {
         case .r:
             notice = nil
             await refresh()
-        case .escape: break
+        case .escape, .tab1, .tab2: break
         }
     }
 
