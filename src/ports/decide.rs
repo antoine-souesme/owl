@@ -124,8 +124,8 @@ fn project_of(directory: &str) -> Option<String> {
 
 /// La chaîne node de `pid`, du plus haut parent au processus lui-même. Elle
 /// remonte tant que le parent est de la famille node et du même
-/// utilisateur : elle s'arrête au shell, au terminal ou à l'agent qui a
-/// lancé le serveur. Un processus hors famille est seul dans sa chaîne.
+/// utilisateur, et tant qu'il n'a pas d'autre enfant : elle s'arrête au
+/// shell, au terminal ou à l'agent qui a lancé le serveur. Un processus hors famille est seul dans sa chaîne.
 pub fn chain(snapshot: &Snapshot, pid: u32) -> Vec<u32> {
     let mut found = vec![pid];
     if !name_of(snapshot, pid).is_some_and(is_node) {
@@ -142,6 +142,15 @@ pub fn chain(snapshot: &Snapshot, pid: u32) -> Vec<u32> {
         }
         let same_user = snapshot.processes.get(&parent).map(|p| p.uid) == uid;
         if !same_user || !name_of(snapshot, parent).is_some_and(is_node) {
+            break;
+        }
+        // Un lanceur (`npm run dev`, `next dev`) n'a qu'un enfant ; un parent
+        // qui en a d'autres est un agent écrit en node : on ne le coupe pas.
+        let has_other_children = snapshot
+            .processes
+            .iter()
+            .any(|(&pid, p)| p.ppid == parent && pid != current);
+        if has_other_children {
             break;
         }
         found.push(parent);
@@ -339,6 +348,35 @@ mod tests {
             },
         );
         assert_eq!(chain(&snapshot, 35860), vec![35815, 35834, 35860]);
+    }
+
+    #[test]
+    fn the_chain_stops_at_a_node_agent_with_other_children() {
+        let mut snapshot = recorded();
+        for (pid, ppid, name, args) in [
+            (50000, 40001, "node", "node /usr/local/bin/claude"),
+            (50010, 50000, "node", "npx some-mcp-server"),
+            (50020, 50010, "node", "node /tmp/mcp/server.js"),
+            (50030, 50000, "zsh", "/bin/zsh -c ls"),
+        ] {
+            snapshot.processes.insert(
+                pid,
+                Process {
+                    ppid,
+                    uid: 501,
+                    elapsed: 1,
+                    args: args.into(),
+                },
+            );
+            snapshot.visible.insert(
+                pid,
+                Visible {
+                    name: name.into(),
+                    directory: None,
+                },
+            );
+        }
+        assert_eq!(chain(&snapshot, 50020), vec![50010, 50020]);
     }
 
     #[test]

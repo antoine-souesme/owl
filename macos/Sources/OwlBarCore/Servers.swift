@@ -115,6 +115,20 @@ public final class ServersState: ObservableObject {
     private let runner: OwlRunning
     private let now: () -> Date
 
+    /// Ce qu'une lecture doit rapporter : la liste, un port, ou rien quand le
+    /// champ contient autre chose qu'un port.
+    private enum Target: Equatable {
+        case list, port(Int), none
+    }
+
+    /// Ce que l'écran attend en ce moment.
+    private var target: Target = .list
+    /// Lecture en cours, s'il y en a une.
+    private var reading: Target?
+    /// Une demande est arrivée pendant la lecture : son résultat est périmé
+    /// et il faut relire.
+    private var readAgain = false
+
     public init(runner: OwlRunning, now: @escaping () -> Date = Date.init) {
         self.runner = runner
         self.now = now
@@ -145,11 +159,7 @@ public final class ServersState: ObservableObject {
 
     /// Relit ce qui est affiché : la recherche en cours, sinon la liste.
     public func reload() async {
-        switch search {
-        case .found(let port, _, _): await runSearch(port)
-        case .invalid: break
-        case nil: await runList()
-        }
+        await read(target)
     }
 
     /// Entrée dans le champ : un port valide lance la recherche, un champ
@@ -162,11 +172,12 @@ public final class ServersState: ObservableObject {
             return
         }
         guard let port = parsePort(trimmed) else {
+            target = .none
             search = .invalid(query)
             errorMessage = nil
             return
         }
-        await runSearch(port)
+        await read(.port(port))
     }
 
     /// Le champ a changé : vidé, il ramène la liste.
@@ -181,7 +192,7 @@ public final class ServersState: ObservableObject {
         search = nil
         notice = nil
         errorMessage = nil
-        await runList()
+        await read(.list)
     }
 
     /// Bouton Stop d'une ligne. Depuis la liste, l'arrêt part aussitôt ;
@@ -198,7 +209,7 @@ public final class ServersState: ObservableObject {
         let result = await send(id)
         stopping.remove(id)
         if case .failure(let failure) = result { notice = failure.message }
-        await runList()
+        await read(.list, fresh: true)
     }
 
     /// Entrée ou bouton Stop dans la fenêtre.
@@ -211,7 +222,7 @@ public final class ServersState: ObservableObject {
         switch result {
         case .success:
             dialog = nil
-            await reload()
+            await read(target, fresh: true)
         case .failure(let failure):
             current.stage = .failed(failure.message)
             dialog = current
@@ -247,30 +258,46 @@ public final class ServersState: ObservableObject {
             .flatMap { decodeOwl(StopData.self, from: $0) }
     }
 
-    private func runList() async {
-        guard !isLoading else { return }
+    /// Une seule lecture à la fois. Une demande qui arrive pendant une
+    /// lecture n'en lance pas une seconde : elle rend la lecture en cours
+    /// périmée, et la lecture recommence avec ce que l'écran attend alors.
+    /// `fresh` : l'état a changé (un serveur vient d'être coupé), même une
+    /// lecture de la même chose est périmée.
+    private func read(_ wanted: Target, fresh: Bool = false) async {
+        target = wanted
+        if let reading {
+            if reading != wanted || fresh { readAgain = true }
+            return
+        }
+        guard wanted != .none else { return }
         isLoading = true
         defer { isLoading = false }
-        switch await runner.run(["ports"]).flatMap({ decodeOwl(PortsData.self, from: $0) }) {
-        case .success(let data):
-            servers = data.servers
-            errorMessage = nil
-            loaded = true
-        case .failure(let failure):
-            errorMessage = failure.message
-        }
-    }
-
-    private func runSearch(_ port: Int) async {
-        guard !isLoading else { return }
-        isLoading = true
-        defer { isLoading = false }
-        switch await runner.run(["ports", String(port)]).flatMap({ decodeOwl(PortsData.self, from: $0) }) {
-        case .success(let data):
-            search = .found(port: port, servers: data.servers, hidden: data.hidden)
-            errorMessage = nil
-        case .failure(let failure):
-            errorMessage = failure.message
-        }
+        repeat {
+            readAgain = false
+            let current = target
+            reading = current
+            let arguments: [String]
+            switch current {
+            case .list: arguments = ["ports"]
+            case .port(let port): arguments = ["ports", String(port)]
+            case .none:
+                reading = nil
+                return
+            }
+            let result = await runner.run(arguments).flatMap { decodeOwl(PortsData.self, from: $0) }
+            reading = nil
+            guard !readAgain, current == target else { continue }
+            switch (result, current) {
+            case (.success(let data), .port(let port)):
+                search = .found(port: port, servers: data.servers, hidden: data.hidden)
+                errorMessage = nil
+            case (.success(let data), _):
+                servers = data.servers
+                errorMessage = nil
+                loaded = true
+            case (.failure(let failure), _):
+                errorMessage = failure.message
+            }
+        } while readAgain
     }
 }

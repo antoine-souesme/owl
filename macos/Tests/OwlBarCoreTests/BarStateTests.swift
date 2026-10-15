@@ -8,9 +8,12 @@ final class FakeRunner: OwlRunning, @unchecked Sendable {
     var answers: [String: Result<Data, OwlFailure>] = [:]
     var calls: [[String]] = []
     var delay: UInt64 = 0
+    /// Délai propre à une commande, à la place de `delay`.
+    var delays: [String: UInt64] = [:]
 
     func run(_ arguments: [String]) async -> Result<Data, OwlFailure> {
         calls.append(arguments)
+        let delay = delays[arguments.joined(separator: " ")] ?? delay
         if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
         return answers[arguments.joined(separator: " ")] ?? .failure(.unreadable)
     }

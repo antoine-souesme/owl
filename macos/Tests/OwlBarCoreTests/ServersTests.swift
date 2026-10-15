@@ -249,6 +249,33 @@ final class ServersTests {
         await task.value
     }
 
+    @Test func escapeDuringASearchKeepsTheListAndNotTheStaleSearch() async throws {
+        runner.answers["ports 5432"] = portsAnswer([serverObject(port: 5432, pid: 22)])
+        runner.answers["ports"] = portsAnswer([serverObject(port: 3000, pid: 10)])
+        runner.delay = 50_000_000
+        state.query = "5432"
+        let search = Task { await state.submitSearch() }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        await state.press(.escape)
+        await search.value
+        #expect(state.search == nil)
+        #expect(state.rows.map(\.port) == ["3000"])
+    }
+
+    @Test func aStopDuringAReadIsFollowedByAFreshRead() async throws {
+        runner.answers["ports"] = portsAnswer([serverObject(port: 3000, pid: 10)])
+        await state.reload()
+        runner.answers["stop 10 3000"] = try stopAnswer()
+        runner.delay = 50_000_000
+        runner.delays["stop 10 3000"] = 0
+        let read = Task { await state.reload() }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        await state.stop(ServerId(pid: 10, port: 3000))
+        await read.value
+        let calls = runner.calls.map { $0.joined(separator: " ") }
+        #expect(calls == ["ports", "ports", "stop 10 3000", "ports"])
+    }
+
     @Test func portParsing() {
         #expect(parsePort("3000") == 3000)
         #expect(parsePort(" 3000 ") == 3000)
