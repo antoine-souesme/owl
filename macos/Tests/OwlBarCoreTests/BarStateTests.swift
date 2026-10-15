@@ -345,6 +345,62 @@ final class BarStateTests {
         await state.press(.up)
         #expect(state.selectedKey?.number == 7)
     }
+
+    @Test func thePanelOpensOnPullRequests() {
+        #expect(state.tab == .pullRequests)
+    }
+
+    @Test func commandTwoShowsTheServersAndReadsThem() async {
+        runner.answers["ports"] = portsAnswer([])
+        await state.press(.tab2)
+        #expect(state.tab == .servers)
+        #expect(runner.calls == [["ports"]])
+        await state.press(.tab1)
+        #expect(state.tab == .pullRequests)
+        #expect(runner.calls.count == 1)
+    }
+
+    @Test func reopeningThePanelOnServersReadsThemAgain() async {
+        runner.answers["ports"] = portsAnswer([])
+        await state.panelOpened()
+        #expect(runner.calls.isEmpty)
+        await state.selectTab(.servers)
+        await state.panelOpened()
+        #expect(runner.calls == [["ports"], ["ports"]])
+    }
+
+    @Test func onTheServersTabKeysGoToTheServers() async throws {
+        runner.answers["list"] = try listAnswer()
+        await state.refresh()
+        runner.answers["ports"] = portsAnswer([])
+        await state.selectTab(.servers)
+        let before = state.selectedKey
+        await state.press(.down)
+        await state.press(.m)
+        #expect(state.selectedKey == before)
+        #expect(state.mergeDialog == nil)
+        state.servers.query = "abc"
+        await state.press(.enter)
+        #expect(state.servers.placeholder == "Not a port: abc")
+    }
+
+    @Test func tabKeysAreIgnoredWhileTheMergeWindowIsOpen() async throws {
+        runner.answers["list"] = try listAnswer()
+        await state.refresh()
+        state.startMerge()
+        try #require(state.mergeDialog != nil)
+        await state.press(.tab2)
+        #expect(state.tab == .pullRequests)
+    }
+
+    @Test func theCounterStillCountsPullRequestsOnly() async throws {
+        runner.answers["list"] = try listAnswer()
+        await state.refresh()
+        let title = state.title
+        runner.answers["ports"] = portsAnswer([serverObject(port: 3000, pid: 10)])
+        await state.selectTab(.servers)
+        #expect(state.title == title)
+    }
 }
 
 extension JSONEncoder {
