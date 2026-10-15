@@ -4,7 +4,11 @@
 //! l'arrêt, et `system` est la seule couche qui lance un programme ou envoie
 //! un signal.
 
+mod decide;
 mod parse;
+
+#[allow(unused_imports)] // Utilisés par `cli` à la tâche 4.
+pub use decide::{servers, Scope, Server};
 
 use std::collections::HashMap;
 
