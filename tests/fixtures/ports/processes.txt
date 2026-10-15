@@ -1,0 +1,11 @@
+    1     0     0 14-02:44:24 /sbin/launchd
+  953     1   501 14-02:40:02 /usr/libexec/rapportd
+ 1055     1   501 14-02:39:58 /System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter
+ 2210     1   501 3-04:12:09 /opt/homebrew/opt/postgresql@16/bin/postgres -D /opt/homebrew/var/postgresql@16
+35815     1   501    15:28:13 npm run dev   
+35834 35815   501    15:28:13 node /Users/antoinesouesme/dev/projets/gkfa/erp-menage/node_modules/.bin/next dev --port 3000
+35860 35834   501    15:28:13 next-server (v15.5.18) 
+40990 40001   501    01:02:03 claude
+41000 40990   501       12:40 /bin/zsh -c npm run dev
+41010 41000   501       12:39 npm run dev
+41022 41010   501       12:37 node /Users/antoinesouesme/dev/playground/owl/site/node_modules/.bin/vite

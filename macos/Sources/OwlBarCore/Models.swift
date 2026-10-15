@@ -108,3 +108,49 @@ public struct PrDetail: Decodable, Equatable, Sendable {
 
 /// Réponse d'une fusion réussie : un objet vide.
 public struct MergeData: Decodable, Equatable, Sendable {}
+
+/// Un serveur se reconnaît à son processus et à son port : un même
+/// processus peut écouter plusieurs ports.
+public struct ServerId: Hashable, Sendable {
+    public let pid: Int
+    public let port: Int
+
+    public init(pid: Int, port: Int) {
+        self.pid = pid
+        self.port = port
+    }
+}
+
+public struct Critical: Decodable, Equatable, Sendable {
+    public let reason: String
+
+    public init(reason: String) {
+        self.reason = reason
+    }
+}
+
+public struct Server: Decodable, Equatable, Sendable, Identifiable {
+    public let port: Int
+    public let pid: Int
+    public let project: String?
+    public let directory: String?
+    public let command: String
+    public let startedAt: Date
+    public let user: String
+    public let critical: Critical?
+
+    public var id: ServerId { ServerId(pid: pid, port: port) }
+}
+
+/// Réponse de `owl ports`. `hidden` : le port cherché est pris par un
+/// processus que `owl` ne voit pas.
+public struct PortsData: Decodable, Equatable, Sendable {
+    public let servers: [Server]
+    public let hidden: Bool
+}
+
+/// Réponse de `owl stop`.
+public struct StopData: Decodable, Equatable, Sendable {
+    public let stopped: [Int]
+    public let forced: Bool
+}

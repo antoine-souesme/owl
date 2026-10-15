@@ -65,4 +65,30 @@ struct DecodingTests {
         #expect(OwlFailure.unsupported.message == "This owl version is not supported by the menu bar app. Update both.")
         #expect(OwlFailure.unreadable.message == "Unreadable answer from owl.")
     }
+
+    @Test func theRecordedServersAreReadInFull() throws {
+        let ports = try decodeOwl(PortsData.self, from: fixture("ports")).get()
+        #expect(ports.hidden == false)
+        #expect(ports.servers.map(\.port) == [3000, 5173])
+        let next = ports.servers[0]
+        #expect(next.id == ServerId(pid: 35860, port: 3000))
+        #expect(next.project == "erp-menage")
+        #expect(next.directory == "/Users/antoinesouesme/dev/projets/gkfa/erp-menage")
+        #expect(next.command == "npm run dev")
+        #expect(next.startedAt == ISO8601DateFormatter().date(from: "2026-10-14T20:31:47Z"))
+        #expect(next.critical == nil)
+    }
+
+    @Test func aCriticalServerWithoutProjectIsRead() throws {
+        let data = Data(#"{"version":1,"ok":true,"data":{"servers":[{"port":7000,"pid":1055,"project":null,"directory":"/","command":"ControlCenter","started_at":"2026-10-01T09:00:00Z","user":"moi","critical":{"reason":"AirPlay Receiver"}}],"hidden":false}}"#.utf8)
+        let server = try decodeOwl(PortsData.self, from: data).get().servers[0]
+        #expect(server.project == nil)
+        #expect(server.critical == Critical(reason: "AirPlay Receiver"))
+    }
+
+    @Test func theRecordedStopIsRead() throws {
+        let stop = try decodeOwl(StopData.self, from: fixture("stop")).get()
+        #expect(stop.stopped == [35815, 35834, 35860])
+        #expect(stop.forced == false)
+    }
 }

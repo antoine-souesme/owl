@@ -13,6 +13,7 @@ use crate::config::{self, Config};
 use crate::filter::{self, Filter};
 use crate::github::{Client, GithubError};
 use crate::model::{ListPage, MergeMethod, PrKey, PrSummary};
+use crate::ports::{self, Machine};
 use crate::token;
 
 use output::{ErrorBody, MergeOut};
@@ -24,12 +25,20 @@ pub enum Request {
     List,
     Detail(PrKey),
     Merge(PrKey, MergeMethod),
+    /// Les serveurs node, ou tout ce qui écoute ce port.
+    Ports(Option<u16>),
+    Stop {
+        pid: u32,
+        port: u16,
+    },
 }
 
-const USAGE: &str = "Usage: owl [list | detail <owner/repo> <number> | merge <owner/repo> <number> <merge|squash|rebase>]
+const USAGE: &str = "Usage: owl [list | detail <owner/repo> <number> | merge <owner/repo> <number> <merge|squash|rebase> | ports [<port>] | stop <pid> <port>]
   owl list
   owl detail <owner/repo> <number>
-  owl merge <owner/repo> <number> <merge|squash|rebase>";
+  owl merge <owner/repo> <number> <merge|squash|rebase>
+  owl ports [<port>]
+  owl stop <pid> <port>";
 
 /// Arguments incompréhensibles. Le texte d'aide est le seul message : il dit
 /// à lui seul ce qui était attendu.
@@ -54,6 +63,12 @@ pub fn parse(args: &[String]) -> Result<Option<Request>, UsageError> {
             parse_key(repo, number)?,
             parse_method(method)?,
         ))),
+        ["ports"] => Ok(Some(Request::Ports(None))),
+        ["ports", port] => Ok(Some(Request::Ports(Some(parse_port(port)?)))),
+        ["stop", pid, port] => Ok(Some(Request::Stop {
+            pid: parse_pid(pid)?,
+            port: parse_port(port)?,
+        })),
         _ => Err(UsageError),
     }
 }
@@ -85,9 +100,26 @@ fn parse_method(word: &str) -> Result<MergeMethod, UsageError> {
     }
 }
 
+/// Port de 1 à 65535.
+fn parse_port(word: &str) -> Result<u16, UsageError> {
+    match word.parse::<u16>() {
+        Ok(port) if port > 0 => Ok(port),
+        _ => Err(UsageError),
+    }
+}
+
+/// Numéro de processus strictement positif.
+fn parse_pid(word: &str) -> Result<u32, UsageError> {
+    match word.parse::<u32>() {
+        Ok(pid) if pid > 0 => Ok(pid),
+        _ => Err(UsageError),
+    }
+}
+
 /// Exécute la demande, écrit l'enveloppe sur la sortie standard et rend le
 /// code de sortie : 0 si `ok`, 1 sinon. Toute erreur passe par l'enveloppe,
-/// réglages et jeton compris : l'app n'a qu'un format à lire.
+/// réglages et jeton compris : l'app n'a qu'un format à lire. Les ports ne
+/// demandent ni réglages ni jeton.
 pub fn run(request: Request) -> ExitCode {
     let (text, ok) = match request {
         Request::List => output::envelope(perform(|settings, client| async move {
@@ -113,6 +145,19 @@ pub fn run(request: Request) -> ExitCode {
                 .map_err(|error| ErrorBody::from(&error))?;
             Ok(MergeOut {})
         })),
+        Request::Ports(port) => output::envelope(
+            match port {
+                None => ports::list(&Machine),
+                Some(port) => ports::search(&Machine, port),
+            }
+            .map(|listing| output::ports_data(&listing))
+            .map_err(|error| ErrorBody::from(&error)),
+        ),
+        Request::Stop { pid, port } => output::envelope(
+            ports::stop(&Machine, pid, port)
+                .map(|stopped| output::stop_data(&stopped))
+                .map_err(|error| ErrorBody::from(&error)),
+        ),
     };
     println!("{text}");
     if ok {
@@ -288,10 +333,51 @@ mod tests {
     }
 
     #[test]
+    fn ports_takes_an_optional_port() {
+        assert_eq!(parse(&args(&["ports"])), Ok(Some(Request::Ports(None))));
+        assert_eq!(
+            parse(&args(&["ports", "3000"])),
+            Ok(Some(Request::Ports(Some(3000))))
+        );
+    }
+
+    #[test]
+    fn stop_takes_a_pid_and_a_port() {
+        assert_eq!(
+            parse(&args(&["stop", "48211", "3000"])),
+            Ok(Some(Request::Stop {
+                pid: 48211,
+                port: 3000
+            }))
+        );
+    }
+
+    #[test]
+    fn malformed_ports_and_stops_are_usage_errors() {
+        for bad in [
+            &["ports", "0"][..],
+            &["ports", "65536"],
+            &["ports", "abc"],
+            &["ports", "-1"],
+            &["ports", "3000", "extra"],
+            &["stop"],
+            &["stop", "48211"],
+            &["stop", "0", "3000"],
+            &["stop", "abc", "3000"],
+            &["stop", "48211", "0"],
+            &["stop", "48211", "70000"],
+        ] {
+            assert_eq!(parse(&args(bad)), Err(UsageError), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn the_usage_message_names_every_subcommand() {
         let text = UsageError.to_string();
         assert!(text.contains("owl list"));
         assert!(text.contains("owl detail <owner/repo> <number>"));
         assert!(text.contains("owl merge <owner/repo> <number> <merge|squash|rebase>"));
+        assert!(text.contains("owl ports [<port>]"));
+        assert!(text.contains("owl stop <pid> <port>"));
     }
 }
