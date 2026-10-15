@@ -52,10 +52,21 @@ avec les sous-commandes `owl list`, `owl detail` et `owl merge`, qui
 répondent en JSON. Elle se lance à l'ouverture de session et prévient quand
 une PR devient fusionnable.
 
+Le panneau a deux onglets. « Pull requests » est l'écran décrit plus haut.
+« Servers » liste les serveurs node qui écoutent un port sur le Mac — ceux
+qu'un agent a lancés et oubliés, par exemple —, avec pour chacun le port, le
+projet, la commande et depuis quand il tourne. Un bouton « Stop » coupe le
+serveur et les processus node qui l'ont lancé (`npm run dev`, `next dev`),
+jamais le terminal ni l'agent. Un champ permet de chercher n'importe quel port,
+quel que soit le programme ; couper depuis la recherche demande toujours
+confirmation, et la fenêtre passe au rouge pour un port critique (port
+système, base de données, AirPlay…). L'app s'appuie sur `owl ports` et
+`owl stop`.
+
 ## Ce que owl ne fait pas
 
 `owl` ne crée pas de pull request, ne pousse pas de code, ne rédige pas de
-commentaires et ne gère pas les issues. Il lit et il fusionne, rien d'autre.
+commentaires et ne gère pas les issues. Côté GitHub, il lit et il fusionne, rien d'autre.
 
 ## Choix techniques
 
