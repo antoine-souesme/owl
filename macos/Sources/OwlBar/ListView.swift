@@ -3,7 +3,6 @@ import SwiftUI
 
 struct ListView: View {
     @ObservedObject var state: BarState
-    @StateObject private var login = LaunchAtLoginToggle()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,20 +48,6 @@ struct ListView: View {
                 }
                 }
             }
-
-            Divider()
-
-            HStack {
-                Toggle("Launch at login", isOn: $login.isOn)
-                    .toggleStyle(.checkbox)
-                Spacer()
-                Text(versionLabel(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button("Quit") { NSApplication.shared.terminate(nil) }
-                    .keyboardShortcut("q")
-            }
-            .padding(10)
         }
     }
 }
