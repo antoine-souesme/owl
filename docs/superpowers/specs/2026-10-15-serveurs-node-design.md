@@ -61,7 +61,7 @@ Les deux rendent la même forme :
     "user": "antoinesouesme",
     "critical": null
   }
-] } }
+], "hidden": false } }
 ```
 
 - Une ligne par couple (processus, port). Un même processus qui écoute en IPv4 et
@@ -76,16 +76,23 @@ Les deux rendent la même forme :
 - `critical` vaut `null`, ou un objet `{ "reason": "PostgreSQL" }`.
 - La liste est triée par port, puis par `pid`.
 - Rien n'écoute : `servers` est vide, ce n'est pas une erreur.
+- `hidden` ne vaut `true` que pour `owl ports <port>`, quand `servers` est vide
+  mais que le port est pourtant occupé : un processus d'un autre utilisateur ou
+  du système, que `lsof` ne montre pas sans droits d'administrateur. `owl` le
+  sait en essayant d'ouvrir le port lui-même, sans rien y accepter.
 
 ### Famille node
 
 Un processus est de la famille node quand le nom de son exécutable est l'un de :
-`node`, `npm`, `npx`, `pnpm`, `yarn`, `bun`, `bunx`, `deno`. `owl ports` sans
+`node`, `npm`, `npx`, `pnpm`, `yarn`, `bun`, `bunx`, `deno`. Ce nom est celui que
+le système connaît (le champ « command » de `lsof`), pas la commande affichée :
+Next.js renomme son serveur `next-server (v15…)` et npm se renomme
+`npm run dev`, mais le système les connaît tous deux sous le nom `node`. `owl ports` sans
 argument ne garde que les processus qui écoutent et qui sont de cette famille.
 
 La **chaîne node** d'un processus est ce processus et ses parents successifs, tant
-qu'ils sont de la famille node. Elle s'arrête au premier parent qui n'en est pas :
-un shell, un terminal, un agent. Pour `npm run dev` → `next dev` → serveur, la
+qu'ils sont de la famille node et appartiennent au même utilisateur. Elle
+s'arrête au premier parent qui n'en est pas : un shell, un terminal, un agent. Pour `npm run dev` → `next dev` → serveur, la
 chaîne est ces trois processus.
 
 ### Port critique
@@ -142,7 +149,8 @@ arrêté.
 
 - les processus qui écoutent un port TCP, avec `lsof` en mode champs (`-F`),
   sans résolution des noms ni des ports ;
-- le dossier courant de ces processus, avec `lsof` (descripteur `cwd`) ;
+- le nom système et le dossier courant de tous les processus visibles, avec
+  `lsof` (descripteur `cwd`) ;
 - la table des processus (numéro, parent, utilisateur, temps écoulé, commande),
   avec `ps`.
 
@@ -202,7 +210,9 @@ bref existant, et la liste se recharge.
 
 Taper un port et Entrée lance `owl ports <port>` et affiche, à la place de la
 liste, ce qui écoute ce port, avec la même forme de ligne. Rien n'écoute :
-« Nothing listens on port 5432 ». Un texte qui n'est pas un port valide :
+« Nothing listens on port 5432 ». Port occupé par un processus invisible
+(`hidden`) : « Port 22 is used by a process owl cannot see (system or another
+user). ». Un texte qui n'est pas un port valide :
 « Not a port: abc ». Échap ou un champ vidé reviennent à la liste.
 
 Le bouton « Stop » d'un résultat de recherche ouvre toujours une fenêtre de
