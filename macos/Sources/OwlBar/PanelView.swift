@@ -7,16 +7,27 @@ struct PanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: Binding(
-                get: { state.tab },
-                set: { tab in Task { await state.selectTab(tab) } }
-            )) {
-                Text("Pull requests").tag(PanelTab.pullRequests)
-                Text("Servers").tag(PanelTab.servers)
+            // Onglets à gauche ; à droite, les commandes de l'onglet affiché.
+            HStack {
+                Picker("", selection: Binding(
+                    get: { state.tab },
+                    set: { tab in Task { await state.selectTab(tab) } }
+                )) {
+                    Text("Pull requests").tag(PanelTab.pullRequests)
+                    Text("Servers").tag(PanelTab.servers)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                Spacer()
+                switch state.tab {
+                case .pullRequests: ListHeader(state: state)
+                case .servers: ServersHeader(servers: state.servers)
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding([.horizontal, .top], 10)
+            .padding(10)
+
+            Divider()
 
             switch state.tab {
             case .pullRequests:

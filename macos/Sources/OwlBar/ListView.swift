@@ -6,23 +6,6 @@ struct ListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(state.refreshLabel)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    Task { await state.refresh() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .disabled(state.isRefreshing)
-            }
-            .padding(10)
-
-            Divider()
-
             if let message = state.errorMessage {
                 Text(message)
                     .textSelection(.enabled)
@@ -49,6 +32,24 @@ struct ListView: View {
                 }
             }
         }
+    }
+}
+
+/// Bout droit de la ligne des onglets, côté pull requests.
+struct ListHeader: View {
+    @ObservedObject var state: BarState
+
+    var body: some View {
+        Text(state.refreshLabel)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        Button {
+            Task { await state.refresh() }
+        } label: {
+            Image(systemName: "arrow.clockwise")
+        }
+        .buttonStyle(.borderless)
+        .disabled(state.isRefreshing)
     }
 }
 

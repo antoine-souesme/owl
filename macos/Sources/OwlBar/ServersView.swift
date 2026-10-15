@@ -8,25 +8,6 @@ struct ServersView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                TextField("Port", text: $servers.query)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 120)
-                    .onSubmit { Task { await servers.submitSearch() } }
-                    .onChange(of: servers.query) { Task { await servers.queryChanged() } }
-                Spacer()
-                Button {
-                    Task { await servers.reload() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .disabled(servers.isLoading)
-            }
-            .padding(10)
-
-            Divider()
-
             if let message = servers.placeholder {
                 Text(message)
                     .textSelection(.enabled)
@@ -64,6 +45,27 @@ struct ServersView: View {
                 )
             }
         }
+    }
+}
+
+/// Bout droit de la ligne des onglets, côté serveurs : recherche et
+/// rechargement.
+struct ServersHeader: View {
+    @ObservedObject var servers: ServersState
+
+    var body: some View {
+        TextField("Port", text: $servers.query)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 90)
+            .onSubmit { Task { await servers.submitSearch() } }
+            .onChange(of: servers.query) { Task { await servers.queryChanged() } }
+        Button {
+            Task { await servers.reload() }
+        } label: {
+            Image(systemName: "arrow.clockwise")
+        }
+        .buttonStyle(.borderless)
+        .disabled(servers.isLoading)
     }
 }
 
