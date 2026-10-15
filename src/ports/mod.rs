@@ -9,12 +9,8 @@ mod parse;
 mod stop;
 mod system;
 
-// Utilisés par `cli` à la tâche 4.
-#[allow(unused_imports)]
 pub use decide::{servers, Scope, Server};
-#[allow(unused_imports)]
 pub use stop::{stop, Stopped};
-#[allow(unused_imports)]
 pub use system::Machine;
 
 use std::collections::HashMap;

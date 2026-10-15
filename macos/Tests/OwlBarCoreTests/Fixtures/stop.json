@@ -1,0 +1,12 @@
+{
+  "data": {
+    "forced": false,
+    "stopped": [
+      35815,
+      35834,
+      35860
+    ]
+  },
+  "ok": true,
+  "version": 1
+}
