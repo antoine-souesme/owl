@@ -7,6 +7,9 @@ mod filter;
 mod github;
 mod model;
 mod notify;
+// Branché sur `cli` à la tâche 4 ; d'ici là, rien ne l'appelle hors des tests.
+#[allow(dead_code)]
+mod ports;
 mod startup;
 mod token;
 mod ui;
