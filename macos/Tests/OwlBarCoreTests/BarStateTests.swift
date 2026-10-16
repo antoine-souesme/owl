@@ -253,13 +253,44 @@ final class BarStateTests {
         #expect(runner.calls.last == ["list"])
     }
 
+    @Test func aMergedPullRequestStillReturnedByGitHubDoesNotComeBack() async throws {
+        let pr = try await loadMergeable()
+        runner.answers["merge moi/owl 42 squash"] = mergeOk
+        // L'index de recherche de GitHub met un instant à oublier la PR
+        // fusionnée : il la renvoie encore.
+        await state.press(.m)
+        await state.press(.enter)
+        #expect(runner.calls.last == ["list"])
+        #expect(!state.pullRequests.contains { $0.key == pr.key })
+        await state.refresh()
+        #expect(!state.pullRequests.contains { $0.key == pr.key })
+    }
+
+    @Test func aListReadBeforeTheMergeDoesNotBringItBack() async throws {
+        let pr = try await loadMergeable()
+        runner.answers["merge moi/owl 42 squash"] = mergeOk
+        runner.delays["list"] = 50_000_000
+        let state = self.state!
+        // Une relecture automatique part juste avant la fin de la fusion et
+        // rapporte la liste d'avant.
+        let reading = Task { await state.refresh() }
+        while runner.calls.last != ["list"] { await Task.yield() }
+        await state.press(.m)
+        await state.press(.enter)
+        await reading.value
+        #expect(!state.pullRequests.contains { $0.key == pr.key })
+        #expect(state.title == menuBarTitle(counter: counter([]), failed: false))
+    }
+
     @Test func theMethodJustUsedIsPreselectedNextTime() async throws {
         _ = try await loadMergeable()
         runner.answers["merge moi/owl 42 rebase"] = mergeOk
         await state.press(.m)
         await state.press(.down)
         await state.press(.enter)
-        _ = try await loadMergeable()
+        // Une autre PR : celle qui vient d'être fusionnée ne revient pas.
+        runner.answers["list"] = try listWith([try withFields(try mergeablePR(), ["number": 43])])
+        await state.refresh()
         await state.press(.m)
         #expect(state.mergeDialog?.method == .rebase)
     }
