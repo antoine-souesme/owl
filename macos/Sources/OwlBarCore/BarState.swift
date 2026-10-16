@@ -41,6 +41,10 @@ public final class BarState: ObservableObject {
     private var tracker = ReadyTracker()
     /// Méthode de la dernière fusion réussie, présélectionnée ensuite.
     private var lastUsedMethod: MergeMethod?
+    /// Pull requests fusionnées depuis le panneau, comme `App::merged` dans la
+    /// TUI. Elles ne reviennent jamais dans la liste : l'index de recherche de
+    /// GitHub met quelques secondes à les oublier et les renvoie encore.
+    private var merged: Set<PrKey> = []
 
     private let runner: OwlRunning
     private let notifier: Notifying
@@ -181,6 +185,7 @@ public final class BarState: ObservableObject {
             notice = "\(key.repo) #\(key.number) merged"
             // La PR fusionnée quitte la liste sans attendre la relecture,
             // comme dans la TUI.
+            merged.insert(key)
             pullRequests.removeAll { $0.key == key }
             if !pullRequests.contains(where: { $0.key == selectedKey }) {
                 selectedKey = pullRequests.first?.key
@@ -256,11 +261,14 @@ public final class BarState: ObservableObject {
         let result = await runner.run(["list"]).flatMap { decodeOwl(ListData.self, from: $0) }
         switch result {
         case .success(let list):
-            pullRequests = list.pullRequests
+            // Une liste lue pendant la fusion, ou juste après, peut encore
+            // porter la PR fusionnée.
+            let current = list.pullRequests.filter { !merged.contains($0.key) }
+            pullRequests = current
             // La sélection suit sa PR ; si elle est sortie de la liste, elle
             // revient en tête.
-            if !list.pullRequests.contains(where: { $0.key == selectedKey }) {
-                selectedKey = list.pullRequests.first?.key
+            if !current.contains(where: { $0.key == selectedKey }) {
+                selectedKey = current.first?.key
             }
             preferredMethod = list.preferredMergeMethod
             refreshInterval = list.refreshInterval
@@ -268,7 +276,7 @@ public final class BarState: ObservableObject {
             errorMessage = nil
             loaded = true
             lastRefresh = now()
-            for pr in tracker.update(list.pullRequests) {
+            for pr in tracker.update(current) {
                 notifier.notify(title: readyTitle, body: readyBody(pr))
             }
         case .failure(let failure):
