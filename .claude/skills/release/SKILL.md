@@ -31,7 +31,8 @@ Refuser et prévenir l'utilisateur si l'une de ces conditions est vraie :
 4. Remplacer la version dans `Cargo.toml`, puis `cargo build` pour mettre
    `Cargo.lock` à jour
 5. `git add Cargo.toml Cargo.lock && git commit -m "Version X.Y.Z"`
-6. `git tag vX.Y.Z` sur le commit de version
+6. `git tag -a vX.Y.Z -m "Version X.Y.Z"` sur le commit de version : un tag
+   annoté, sans quoi `--follow-tags` ne l'envoie pas
 7. `git push origin main --follow-tags`
 8. `git checkout develop && git merge main --no-ff -m "Retour de la version X.Y.Z"`
 9. `git push origin develop`
