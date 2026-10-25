@@ -1,7 +1,7 @@
 # owl
 
 <p align="center">
-  <img src="docs/media/demo.gif" alt="owl demo" width="800">
+  <img src="docs/media/demo.gif" alt="Owl menu bar app demo" width="800">
 </p>
 
 A command-line tool that lists your GitHub pull requests in the terminal and merges
